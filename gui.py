@@ -343,7 +343,7 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self.setWindowTitle('%s %s' % (APP_TITLE, APP_VERSION))
-        self.resize(1240, 780)
+        self._apply_default_size()
         self.setFont(QFont('Microsoft YaHei', 9))
         if icon_path():
             from PyQt6.QtGui import QIcon
@@ -385,9 +385,12 @@ class MainWindow(QMainWindow):
         self.tb.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tb.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tb.itemSelectionChanged.connect(self.on_pick)
-        self.tb.itemDoubleClicked.connect(lambda *_: self.open_external())
+        self.tb.itemDoubleClicked.connect(self._on_item_dbl)
+        self.tb.setMinimumWidth(220)          # 分割条拖到极左也不会挤没
+        self.tb.setMaximumWidth(560)          # 上限（resizeEvent 里再按窗口 32% 收紧）
         sp.addWidget(self.tb)
         right = QWidget()
+        right.setMinimumWidth(320)
         rv = QVBoxLayout(right)
         self.lb_info = QLabel('选一个文件看详情')
         self.lb_info.setWordWrap(True)
@@ -427,7 +430,8 @@ class MainWindow(QMainWindow):
         row = QHBoxLayout()
         b1 = QPushButton('📖 在阅读区打开')
         b1.clicked.connect(self.preview_here)
-        b2 = QPushButton('🖼 用系统默认程序打开')
+        b2 = QPushButton('↗ 用外部程序打开')
+        b2.setToolTip('用系统默认程序打开当前文件（双击不再走这里）')
         b2.clicked.connect(self.open_external)
         b3 = QPushButton('📂 打开所在文件夹')
         b3.clicked.connect(self.open_folder)
@@ -449,9 +453,105 @@ class MainWindow(QMainWindow):
         rv.addWidget(self.view, 1)
         rv.addLayout(row)
         sp.addWidget(right)
-        sp.setSizes([760, 480])
+        sp.setChildrenCollapsible(False)      # 两侧不可被折叠掉
+        sp.setStretchFactor(0, 0)             # 左：列表/详情，不抢空间
+        sp.setStretchFactor(1, 1)             # 右：阅读区，占据窗口增量
+        sp.setSizes([340, 1160])              # 阅读区默认占大头（窗口变窄时按比例缩放）
+        self._split = sp
         v.addWidget(sp, 1)
         self.statusBar().showMessage('就绪')
+
+    # ---- 窗口尺寸 / 分割比例
+    def _apply_default_size(self):
+        """默认窗口尺寸：1500×950，但不超出屏幕可用区的 90%。"""
+        try:
+            scr = QApplication.primaryScreen()
+            g = scr.availableGeometry() if scr is not None else None
+            if g is not None and g.width() > 0 and g.height() > 0:
+                w, h = min(1500, int(g.width() * 0.9)), min(950, int(g.height() * 0.9))
+            else:
+                w, h = 1500, 950
+        except Exception:
+            w, h = 1500, 950
+        self.resize(max(1100, w), max(720, h))
+
+    def resizeEvent(self, ev):
+        """窗口变化时：左侧列表最大宽度 ≤ 窗口 32%（且 ≤560px），保证阅读区占大头。"""
+        try:
+            super().resizeEvent(ev)
+        except Exception:
+            pass
+        try:
+            tb = getattr(self, 'tb', None)
+            if tb is not None:
+                tb.setMaximumWidth(max(tb.minimumWidth(),
+                                       min(560, int(self.width() * 0.32))))
+        except Exception:
+            pass
+
+    def _on_item_dbl(self, *_):
+        """列表项双击 → 一律在阅读区内部打开（不再甩给外部程序）。"""
+        self.open_here()
+
+    def open_here(self):
+        """在阅读区内部打开当前项：PDF/EPUB 走内置引擎渲染，TXT/MD/JSON/CSV 走文本预览。
+        记历史/统计，刷新著录与版本下拉；外部程序只由「↗ 用外部程序打开」显式触发。
+        """
+        self.on_pick()                       # 刷新著录信息 + 版本下拉
+        r = self._cur()
+        if not r:
+            self.statusBar().showMessage('先在列表里选一个文件')
+            return False
+        p = os.path.join(r.get('dir') or '', r.get('name') or '')
+        if not os.path.isfile(p):
+            self.statusBar().showMessage('文件不在了：%s' % p)
+            return False
+        ext = ((r.get('ext') or os.path.splitext(p)[1]) or '').lower()
+        if ext in ('.pdf', '.epub', '.xps', '.cbz', '.mobi', '.fb2', '.svg'):
+            try:
+                import fitz
+                if ext == '.pdf':
+                    with open(p, 'rb') as f:
+                        if not f.read(5).startswith(b'%PDF'):
+                            raise ValueError('PDF 结构不完整（可先用 CathayRepair 修一下）')
+                d = fitz.open(p)
+                if int(getattr(d, 'page_count', 0) or 0) <= 0:
+                    self.statusBar().showMessage('这个文件没有可显示的页面')
+                    return False
+                self.pd = d
+                self._pd_path = p
+                self.pgno = 0
+                try:
+                    _mk = (C.load_settings().get('marks') or {}).get(p) or {}
+                    self.pgno = max(0, min(int(d.page_count) - 1, int(_mk.get('page') or 0)))
+                except Exception:
+                    pass
+                self._pdf_show()
+                self._hist_add()
+                self._stat_open(p)
+                self.statusBar().showMessage(
+                    '已在阅读区打开：%s（共 %d 页，PgUp/PgDn 翻页）'
+                    % (os.path.basename(p), int(d.page_count)))
+                return True
+            except Exception as e:
+                self.statusBar().showMessage(
+                    '阅读区打开失败：%s（可点「↗ 用外部程序打开」）' % e)
+                return False
+        if ext in ('.txt', '.md', '.json', '.csv'):
+            try:
+                self._show_text_file(p)      # 内部已记统计
+                self._hist_add()
+                self.statusBar().showMessage('已在阅读区打开：%s' % os.path.basename(p))
+                return True
+            except Exception as e:
+                self.statusBar().showMessage('阅读区打开失败：%s' % e)
+                return False
+        self.view.setPlainText('这个格式（%s）暂不支持在此预览，'
+                               '点「↗ 用外部程序打开」。' % ext)
+        self.pd = None
+        self._pd_path = ''
+        self._reader = 'text'
+        return False
 
     # ---- 状态
     def _refresh_status(self):
@@ -898,41 +998,48 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def open_cli_arg(self):
-        """双击或用「打开方式」启动时，把命令行里那个文件直接读出来。"""
+        """双击关联 / 命令行带文件启动：一律先在阅读区内部打开（不甩给外部程序）。
+        多个文件参数时打开第一个，其余在状态栏提示（未入列表）。
+        """
         try:
             cand = [a for a in sys.argv[1:] if not a.startswith('-')]
         except Exception:
             cand = []
-        p = ''
+        files = []
         for a in cand:
-            if os.path.isfile(a):
-                p = os.path.abspath(a)
-                break
-        if not p:
+            try:
+                if os.path.isfile(a):
+                    files.append(os.path.abspath(a))
+            except Exception:
+                continue
+        if not files:
             return
+        p = files[0]
         try:
             self.ed_kw.setText(os.path.splitext(os.path.basename(p))[0])
             self.do_search()
-            if self.rows:
-                self.tb.setCurrentCell(0, 0)
+            want = os.path.normcase(p)
+            cur = -1
+            for i, r in enumerate(self.rows):
+                rp = os.path.normcase(os.path.abspath(
+                    os.path.join(r.get('dir') or '', r.get('name') or '')))
+                if rp == want:
+                    cur = i
+                    break
+            if cur < 0 and self.rows:
+                cur = 0                      # 库里没登记 → 仍打开文件，列表选第一个同名词
+            if cur >= 0:
+                self.tb.setCurrentCell(cur, 0)
                 self.on_pick()
-            ext = os.path.splitext(p)[1].lower()
-            if ext in ('.pdf', '.epub', '.xps', '.cbz', '.mobi', '.fb2', '.svg'):
-                import fitz
-                d = fitz.open(p)
-                if d.page_count > 0:
-                    self.pd = d
-                    self._pd_path = p
-                    self.pgno = 0
-                    self._pdf_show()
-                    self._hist_add()
-                    self._stat_open(p)
-                    return
-            self.preview_here()
-            self._hist_add()
-            self.statusBar().showMessage('已打开：%s' % os.path.basename(p))
-        except Exception as e:
-            self.statusBar().showMessage('打开失败：%s' % e)
+        except Exception:
+            pass
+        ok = self._open_path(p)              # 一律在阅读区内部打开（PDF/EPUB/文本）
+        if ok:
+            tail = ''
+            if len(files) > 1:
+                tail = '（另有 %d 个文件参数已忽略）' % (len(files) - 1)
+            self.statusBar().showMessage('已在阅读区打开：%s%s'
+                                         % (os.path.basename(p), tail))
 
     def epub_here(self):
         """用 PDF 引擎直接打开当前项（支持 EPUB；也可以打开 PDF）。Ctrl+E"""
@@ -1629,15 +1736,17 @@ class MainWindow(QMainWindow):
         try:
             if ext in ('.txt', '.md', '.json', '.csv'):
                 self._show_text_file(p)
+                self._hist_add()
                 self.statusBar().showMessage('已打开文本（只读，最多显示前 200 KB）')
-            elif ext == '.pdf':
-                # 先验文件头/结尾：坏 PDF 会让 PyMuPDF 直接 abort（连异常都不抛）
-                with open(p, 'rb') as f:
-                    head = f.read(5)
-                    f.seek(max(0, os.path.getsize(p) - 2048))
-                    tail = f.read()
-                if not head.startswith(b'%PDF') or b'%%EOF' not in tail:
-                    raise ValueError('PDF 结构不完整（可先用 CathayRepair 修一下）')
+            elif ext in ('.pdf', '.epub', '.xps', '.cbz', '.mobi', '.fb2', '.svg'):
+                if ext == '.pdf':
+                    # 先验文件头/结尾：坏 PDF 会让 PyMuPDF 直接 abort（连异常都不抛）
+                    with open(p, 'rb') as f:
+                        head = f.read(5)
+                        f.seek(max(0, os.path.getsize(p) - 2048))
+                        tail = f.read()
+                    if not head.startswith(b'%PDF') or b'%%EOF' not in tail:
+                        raise ValueError('PDF 结构不完整（可先用 CathayRepair 修一下）')
                 import fitz
                 d = fitz.open(p)
                 self.pd = d
@@ -1649,10 +1758,11 @@ class MainWindow(QMainWindow):
                 except Exception:
                     pass
                 self._pdf_show()
+                self._hist_add()
                 self._stat_open(p)
             else:
                 self.view.setPlainText('这个格式（%s）暂不支持在此预览，'
-                                       '点「用系统默认程序打开」。' % ext)
+                                       '点「↗ 用外部程序打开」。' % ext)
         except Exception as e:
             self.view.setPlainText('打不开：%s: %s' % (type(e).__name__, e))
 
