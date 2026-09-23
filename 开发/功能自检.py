@@ -37,7 +37,8 @@
 + batch18 新增 4 项（122-125：独立阅读窗口 Ctrl+F 可用 / 最小化文件列表窗口不带走阅读器 /
   直接打开文件→左栏列同文件夹+相似文件名 / 直接打开孤立文件不出错）。
 + batch19 修复 1 项（126：PDV5/PDV6 后缀（_PDV5AIFOCR 等）与其他后缀归为同一本）。
-最后输出 SUMMARY ok=N fail=M（当前 **126/126**）。
++ batch20 修复 1 项（127：左栏拖窄后「跨文件全文检索」主入口不被收进 ⋮）。
+最后输出 SUMMARY ok=N fail=M（当前 **127/127**）。
 + batch17：左侧文件列表可拖得極窄（min 48px，窄时动作按钮收进「⋮」菜单、
   自动收起「上级文件夹」列），新增 Ctrl+Shift+L 收起/展开左栏（测试 110 已扩充）。
 + batch16 新增 3 项（118-120：大 PDF 著录不卡（浅著录秒回 + 后台补深 + 缓存）/ 超大 TXT 只载前 8MB
@@ -1567,7 +1568,7 @@ def main():
     step(74, '搜索结果关键词高亮（文件名列）', kw_highlight)
 
     def fts_left():
-        ok = (hasattr(w, 'b_fts') and w.b_fts.text() == '🔎 跨文件全文检索'
+        ok = (hasattr(w, 'b_fts') and '检索' in w.b_fts.text()
               and not w.reader_panel.isAncestorOf(w.b_fts))
         return (ok, 'text=%r in_reader=%s'
                 % (w.b_fts.text(), w.reader_panel.isAncestorOf(w.b_fts)))
@@ -2174,10 +2175,17 @@ def main():
         app.processEvents()
         w.view.selectAll()
         app.processEvents()
-        w.footnote_here()
-        app.processEvents()
-        md = QApplication.clipboard().mimeData()
-        data = bytes(md.data('text/rtf')) if (md is not None and md.hasFormat('text/rtf')) else b''
+        data = b''
+        for _try in range(3):          # 剪贴板是系统共享资源，偶尔被别的进程占用 → 重试
+            w.footnote_here()
+            app.processEvents()
+            md = QApplication.clipboard().mimeData()
+            data = bytes(md.data('text/rtf')) if (md is not None and md.hasFormat('text/rtf')) else b''
+            if data:
+                break
+            QTimer.singleShot(120, lambda: None)
+            app.processEvents()
+            time.sleep(0.12)
         ok = (b'\\rtf1' in data and b'\\footnote' in data and b'\\u' in data)
         return (ok, 'has_rtf=%s len=%d' % (bool(data), len(data)))
 
@@ -2373,27 +2381,29 @@ def main():
     step(109, '⇄ 进对读：PDF 停原页，TXT 同步到该页', dual_keep_page)
 
     def left_width():
-        # batch17：可拖得极窄（min≤60）且左栏按钮在窄时收进「⋮」
+        # batch17：可拖得极窄（min≤60）；batch20：主按钮「跨文件全文检索」窄了也不藏（换短标签）
         _mn = w.tb.minimumWidth()
         w._fit_left_buttons(200)
-        narrow_ok = (not w.b_fts.isVisible() or w.b_fts.isHidden()) and not w.b_more.isHidden() \
-            and w.tb.isColumnHidden(2)
-        w._fit_left_buttons(520)
-        wide_ok = not w.b_fts.isHidden() and w.b_more.isHidden() and not w.tb.isColumnHidden(2)
+        narrow_ok = ((not w.b_fts.isHidden()) and ('检索' in w.b_fts.text())
+                     and not w.b_more.isHidden() and w.tb.isColumnHidden(2))
+        w._fit_left_buttons(600)
+        wide_ok = (not w.b_fts.isHidden() and w.b_more.isHidden()
+                   and all(not x.isHidden() for x in (w.b_fts_hist, w.b_alias, w.b_exc))
+                   and not w.tb.isColumnHidden(2))
         # 分割条能拖到极窄（窄模式下左栏实际宽度可小）
         w._fit_left_buttons(160)
         w._split.setSizes([48, max(400, w.width() - 48)])
         app.processEvents()
         lw = w._split.sizes()[0]
-        w._fit_left_buttons(520)
+        w._fit_left_buttons(600)
         w._split.setSizes([340, max(400, w.width() - 340)])
         app.processEvents()
         return (w.tb.minimumWidth() <= 60 and w.cb_ver.maximumWidth() >= 300
-                and narrow_ok and wide_ok and lw <= 70,
+                and narrow_ok and wide_ok and lw <= 140,
                 'tb.min=%s cb_ver.max=%s 窄=%s 宽=%s 拖后left=%s'
                 % (w.tb.minimumWidth(), w.cb_ver.maximumWidth(), narrow_ok, wide_ok, lw))
 
-    step(110, '左栏可拖得极窄（窄时按钮收进⋮）+ 「版本」下拉显示变宽', left_width)
+    step(110, '左栏可拖得极窄（主按钮保留下，其余收进⋮）+ 「版本」下拉显示变宽', left_width)
 
     def excerpt_viewer_open():
         for d in (200, 600, 1200, 2000):
@@ -2736,6 +2746,30 @@ def main():
         return (ok, 'rows=%d 版本=%d 书主干=%s' % (n_rows, n_ver, keys))
 
     step(126, 'PDV5/PDV6 后缀与其他后缀归为同一本（可切换版本）', pdv_group)
+
+    # ---------------- batch20（127）：「跨文件全文检索」主入口永远看得见 ----------------
+    def fts_button_always():
+        # 用户报障：左栏拖窄（settings split_sizes=[211,700]）后主按钮看不见，以为功能没了。
+        # 真因：batch17 给这排按钮设了 Ignored 策略 → 实际宽高被压成 0（仅查 hidden 标志查不出来）。
+        w._split.setSizes([211, max(500, w.width() - 211)])
+        app.processEvents()
+        w._fit_left_buttons(211)
+        app.processEvents()
+        a = (not w.b_fts.isHidden(), w.b_fts.text(), not w.b_more.isHidden(), w.b_fts.width())
+        w._split.setSizes([600, max(500, w.width() - 600)])
+        app.processEvents()
+        w._fit_left_buttons(600)
+        app.processEvents()
+        b = (not w.b_fts.isHidden(), w.b_fts.text(), w.b_fts.width(),
+             all(not x.isHidden() and x.width() > 20 for x in (w.b_fts_hist, w.b_alias, w.b_exc)))
+        scs = [s.key().toString() for s in w.findChildren(G.QShortcut)]
+        has_sc = 'Ctrl+Shift+S' in scs
+        ok = (a[0] and a[2] and a[3] > 20 and '检索' in a[1]
+              and b[0] and b[2] > 40 and b[3] and has_sc)
+        return (ok, '窄左栏：主按钮在=%s 文字=%r 宽=%d ⋮在=%s；宽左栏：其余可见且宽>20=%s；快捷键=%s'
+                % (a[0], a[1], a[3], a[2], b[3], has_sc))
+
+    step(127, '左栏拖窄后「跨文件全文检索」主入口可见（真宽度>20，Ctrl+Shift+S）', fts_button_always)
     try:
         w.close()
     except Exception:

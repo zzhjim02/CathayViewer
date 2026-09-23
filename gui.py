@@ -1696,6 +1696,9 @@ class MainWindow(QMainWindow):
         self._findk.activated.connect(self.find_focus)
         self._esck = QShortcut(QKeySequence('Esc'), self)
         self._esck.activated.connect(self.find_close)
+        # batch20：跨文件全文检索的快捷键（左栏收窄/收起时也一定能用）
+        self._ftsk = QShortcut(QKeySequence('Ctrl+Shift+S'), self)
+        self._ftsk.activated.connect(self.fulltext_search)
         try:
             from PyQt6.QtCore import QTimer as _QT
             _QT.singleShot(300, self.open_cli_arg)   # 双击 / 命令行带路径 → 直接打开
@@ -1766,7 +1769,7 @@ class MainWindow(QMainWindow):
         lv.setContentsMargins(0, 0, 0, 0)
         lh = QHBoxLayout()
         self.b_fts = QPushButton('🔎 跨文件全文检索')
-        self.b_fts.setToolTip('对当前搜索结果的 PDF/文本做跨文件全文检索（另开进程，不卡界面）')
+        self.b_fts.setToolTip('对当前搜索结果的 PDF/文本做跨文件全文检索（另开进程，不卡界面）—— Ctrl+Shift+S')
         self.b_fts.clicked.connect(self.fulltext_search)
         self.b_fts_hist = QPushButton('🕘 检索历史')
         self.b_fts_hist.setToolTip('调阅历次跨文件全文检索结果（自动保存，Ctrl+Shift+F）')
@@ -1799,11 +1802,12 @@ class MainWindow(QMainWindow):
         lh.addWidget(self.b_more)
         self.b_more.setVisible(False)
         lh.addStretch(1)
-        # batch17：这排按钮不把左栏「撑宽」（可被压缩；太窄时整排收进 ⋮）
+        # batch20：这排按钮按自然宽度显示（batch17 设的 Ignored 策略会把它们压成 0 宽、整排看不见 —— 已修）；
+        # 拖窄时靠 _fit_left_buttons 把次要按钮收进 ⋮，主入口「检索」始终保留
         from PyQt6.QtWidgets import QSizePolicy
         for _b in (self.b_fts, self.b_fts_hist, self.b_alias, self.b_exc, self.b_more):
-            _b.setMinimumWidth(0)
-            _b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+            _b.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+            _b.setMinimumHeight(24)
         lv.addLayout(lh)
         lv.addWidget(self.tb, 1)
         sp.addWidget(left)
@@ -2002,22 +2006,48 @@ class MainWindow(QMainWindow):
             pass
 
     def _fit_left_buttons(self, w):
-        """左栏窄 → 把 4 个动作按钮收进「⋮」菜单；再窄则收起「上级文件夹」列。"""
+        """左栏窄 → 次要按钮（检索历史/人名别名/摘录本）收进「⋮」；
+        「跨文件全文检索」是本栏主入口，**尽量留住**（窄了换短标签，再窄只留图标）。"""
         try:
-            btns = [x for x in (getattr(self, 'b_fts', None), getattr(self, 'b_fts_hist', None),
-                                getattr(self, 'b_alias', None), getattr(self, 'b_exc', None))
-                    if x is not None]
-            narrow = int(w) < 420
-            for b in btns:
-                b.setVisible(not narrow)
-            more = getattr(self, 'b_more', None)
-            if more is not None:
-                more.setVisible(narrow)
-            tb = getattr(self, 'tb', None)
-            if tb is not None:
-                tb.setColumnHidden(2, int(w) < 220)     # 太窄时收起「上级文件夹」列
+            w = int(w)
         except Exception:
-            pass
+            w = 340
+        primary = getattr(self, 'b_fts', None)
+        others = [x for x in (getattr(self, 'b_fts_hist', None),
+                              getattr(self, 'b_alias', None),
+                              getattr(self, 'b_exc', None)) if x is not None]
+        more = getattr(self, 'b_more', None)
+        if w >= 560:
+            if primary is not None:
+                primary.setText('🔎 跨文件全文检索')
+            for b in others:
+                b.setVisible(True)
+            if more is not None:
+                more.setVisible(False)
+        elif w >= 380:
+            if primary is not None:
+                primary.setText('🔎 全文检索')
+            for b in others:
+                b.setVisible(False)
+            if more is not None:
+                more.setVisible(True)
+        elif w >= 160:
+            if primary is not None:
+                primary.setText('🔎 检索')
+            for b in others:
+                b.setVisible(False)
+            if more is not None:
+                more.setVisible(True)
+        else:
+            if primary is not None:
+                primary.setText('🔎')
+            for b in others:
+                b.setVisible(False)
+            if more is not None:
+                more.setVisible(True)
+        tb = getattr(self, 'tb', None)
+        if tb is not None:
+            tb.setColumnHidden(2, w < 220)     # 太窄时收起「上级文件夹」列
 
     def toggle_list(self):
         """收起/展开左侧文件列表（Ctrl+Shift+L）。"""
