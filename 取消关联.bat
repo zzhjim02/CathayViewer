@@ -10,15 +10,19 @@ setlocal
 rem ---- .pdf ----
 reg delete "HKCU\Software\Classes\CathayViewer.pdf" /f
 reg delete "HKCU\Software\Classes\.pdf\OpenWithProgids" /v "CathayViewer.pdf" /f
+reg delete "HKCU\Software\Classes\.pdf" /ve /f
 rem ---- .epub ----
 reg delete "HKCU\Software\Classes\CathayViewer.epub" /f
 reg delete "HKCU\Software\Classes\.epub\OpenWithProgids" /v "CathayViewer.epub" /f
+reg delete "HKCU\Software\Classes\.epub" /ve /f
 rem ---- .txt ----
 reg delete "HKCU\Software\Classes\CathayViewer.txt" /f
 reg delete "HKCU\Software\Classes\.txt\OpenWithProgids" /v "CathayViewer.txt" /f
+reg delete "HKCU\Software\Classes\.txt" /ve /f
 rem ---- .md ----
 reg delete "HKCU\Software\Classes\CathayViewer.md" /f
 reg delete "HKCU\Software\Classes\.md\OpenWithProgids" /v "CathayViewer.md" /f
+reg delete "HKCU\Software\Classes\.md" /ve /f
 echo.
 echo Done. Associations for this user removed.
 pause

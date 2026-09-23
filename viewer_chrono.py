@@ -44,6 +44,24 @@ _ERA_ALT = '|'.join(sorted(ERA.keys(), key=len, reverse=True))
 _NUM = r'(?:[〇零一二三四五六七八九十百千廿卅0-9]{1,6}|元|正)'
 _GRP = r'[甲乙丙丁戊己庚辛壬癸][子丑寅卯辰巳午未申酉戌亥]'
 
+# 年号实际使用的最后一年（用于判断「康熙63年」这类越界纪年；缺项则不做越界检查）
+ERA_END = {
+    '洪武': 1398, '建文': 1402, '永樂': 1424, '永乐': 1424, '洪熙': 1425,
+    '宣德': 1435, '正統': 1449, '正统': 1449, '景泰': 1456, '天順': 1464, '天顺': 1464,
+    '成化': 1487, '弘治': 1505, '正德': 1521, '嘉靖': 1566, '隆慶': 1572, '隆庆': 1572,
+    '萬曆': 1620, '万历': 1620, '泰昌': 1620, '天啟': 1627, '天启': 1627,
+    '崇禎': 1644, '崇祯': 1644,
+    '天命': 1626, '天聰': 1635, '天聪': 1635, '崇德': 1643, '順治': 1661, '顺治': 1661,
+    '康熙': 1722, '雍正': 1735, '乾隆': 1795, '嘉慶': 1820, '嘉庆': 1820,
+    '道光': 1850, '咸豐': 1861, '咸丰': 1861, '同治': 1874, '光緒': 1908, '光绪': 1908,
+    '宣統': 1912, '宣统': 1912,
+    '太平天國': 1864, '太平天国': 1864,
+    '大同': 1933, '康德': 1945, '洪憲': 1916, '洪宪': 1916,
+    '明治': 1912, '大正': 1926, '昭和': 1989, '平成': 2019,
+    '開國': 1896, '开国': 1896, '建陽': 1897, '建阳': 1897, '光武': 1907, '隆熙': 1910,
+    # 注：民國（1912– ）、令和（2019– ）仍在沿用，不做越界判定
+}
+
 _RE_ERA_N = re.compile(r'(%s)\s*(%s)\s*年' % (_ERA_ALT, _NUM))
 _RE_ERA_GZ = re.compile(r'(%s)\s*(%s)' % (_ERA_ALT, _GRP))
 _RE_GZ = re.compile(r'(%s)(年?)' % _GRP)
@@ -103,15 +121,101 @@ def ganzhi_years(gz, y0=1700, y1=2000):
     return [y for y in range(int(y0), int(y1) + 1) if (y - _GANZHI_BASE) % 60 == idx]
 
 
-_RE_REPUBLIC_MIN = 39          # 民国 39 年及以后才自动换算（民国元年–38 年不再标注）
+def era_end(era):
+    """年号实际使用的最后一年（公元）；未知返回 None。"""
+    return ERA_END.get(era)
 
 
-def _skip_era(era, n):
+def _cn_num(n):
+    """阿拉伯数字 → 汉数字（用于年号纪年，如 24 → 二十四）。"""
+    n = int(n)
+    if n <= 0:
+        return str(n)
+    d = '〇一二三四五六七八九'
+    if n < 10:
+        return d[n]
+    if n < 20:
+        return '十' + (d[n - 10] if n > 10 else '')
+    if n < 100:
+        t, u = divmod(n, 10)
+        return d[t] + '十' + (d[u] if u else '')
+    if n < 1000:
+        h, rem = divmod(n, 100)
+        s = d[h] + '百'
+        if rem == 0:
+            return s
+        if rem < 10:
+            return s + '〇' + d[rem]
+        return s + _cn_num(rem)
+    return str(n)
+
+
+def to_cn(n):
+    """对外：年数字 → 汉数字（n=1 也用「1」；纪年请用 era_year_cn）。"""
+    return _cn_num(n)
+
+
+def era_year_cn(n):
+    """纪年年数写法：1 → 元，其余汉数字。"""
+    return '元' if int(n) == 1 else _cn_num(n)
+
+
+def eras_in_year(year, span=40):
+    """公元 year 年在用的年号 → [{'era','n'}（n = 该年号的第几年）]（按起始年排序）。
+
+    优先按实际起讫年（ERA_END）判定；未知结束年的年号（如民國）用宽窗口。
+    """
+    y = int(year)
+    out = []
+    for k, start in ERA.items():
+        if _is_trad_dup(k) or start is None:
+            continue
+        end = ERA_END.get(k)
+        if end is not None:
+            if not (start <= y <= end):
+                continue
+        elif not (start <= y <= start + span):
+            continue
+        out.append({'era': k, 'n': y - start + 1})
+    out.sort(key=lambda r: ERA[r['era']])
+    return out
+
+
+def format_eras(year, span=40, sep='、'):
+    """反查输出：把该年每个年号写成「光绪二十四年」这样的形式。"""
+    parts = ['%s%s年' % (r['era'], era_year_cn(r['n']))
+             for r in eras_in_year(year, span)]
+    return sep.join(parts)
+
+
+def _overflow_note(era, n, y):
+    """越界纪年（如康熙63年）的提示：说明超出了多少年，该年实际对应哪些纪年。"""
+    st, end = ERA.get(era), ERA_END.get(era)
+    if st is None or end is None:
+        return ''
+    span = end - st + 1
+    if n <= span:
+        return ''
+    actual = format_eras(y) or '（同期无内置年号）'
+    return '（存疑：%s共%d年，无第%d年；该年实为 %s）' % (era, span, n, actual)
+
+
+_RE_REPUBLIC_MIN = 39          # 民国 39 年及以后才自动换算（复制/摘录时民国元年–38 年不再标注）
+
+
+def _skip_era(era, n, allow_short=False):
+    """复制/摘录自动换算时跳过民国 1–38 年；工具「换算」可传 allow_short=True 全支持。"""
+    if allow_short:
+        return False
     return era in ('民國', '民国') and n is not None and n <= (_RE_REPUBLIC_MIN - 1)
 
 
-def convert(text, gz_from=1700, gz_to=2000):
-    """识别 text 中的纪年，返回命中列表 [{start,end,token,note,kind,year}]（不重叠）。"""
+def convert(text, gz_from=1700, gz_to=2000, allow_short_republic=False):
+    """识别 text 中的纪年，返回命中列表 [{start,end,token,note,kind,year}]（不重叠）。
+
+    allow_short_republic=True → 民国 1–38 年也换算（供「历史纪年换算」工具用）；
+    默认 False（复制/摘录自动注记时不标注民国 1–38 年）。
+    """
     if not text:
         return []
     spans = [(m.start(), m.end()) for m in _RE_SKIP.finditer(text)]
@@ -132,9 +236,10 @@ def convert(text, gz_from=1700, gz_to=2000):
         if not n or st is None:
             continue
         y = st + n - 1
-        if _skip_era(era, n):
+        if _skip_era(era, n, allow_short_republic):
             continue
-        cands.append((m.start(), m.end(), '%s%s年=%d年' % (era, numtxt, y), 'era', y))
+        note = '%s%s年=%d年%s' % (era, numtxt, y, _overflow_note(era, n, y))
+        cands.append((m.start(), m.end(), note, 'era', y))
     for m in _RE_ERA_GZ.finditer(text):
         if prot(m.start()) or tail(m):
             continue
@@ -172,9 +277,9 @@ def convert(text, gz_from=1700, gz_to=2000):
              'kind': kind, 'year': y} for s, e, note, kind, y in chosen]
 
 
-def annotate(text, gz_from=1700, gz_to=2000):
+def annotate(text, gz_from=1700, gz_to=2000, allow_short_republic=False):
     """在引文里每个纪年后加【对应公元年】。返回 (新文本, 命中列表)。"""
-    hits = convert(text, gz_from, gz_to)
+    hits = convert(text, gz_from, gz_to, allow_short_republic)
     if not hits:
         return text, []
     out, prev = [], 0
@@ -187,12 +292,12 @@ def annotate(text, gz_from=1700, gz_to=2000):
     return ''.join(out), hits
 
 
-def annotate_append(text, gz_from=1700, gz_to=2000):
+def annotate_append(text, gz_from=1700, gz_to=2000, allow_short_republic=False):
     """复制文本时用：在整段文字后面追加一栏【纪年换算】（去重、保留出现顺序）。
 
     返回 (新文本, 命中列表)。无命中则原文返回。
     """
-    hits = convert(text, gz_from, gz_to)
+    hits = convert(text, gz_from, gz_to, allow_short_republic)
     if not hits:
         return text, []
     notes = []
@@ -248,9 +353,31 @@ def selftest():
     a2, h2 = annotate('民国四十年，迁台。')
     ok('民国四十年' in a2 and '1951' in a2, '民国四十年→1951：%s' % a2)
     a2b, h2b = annotate('民国三十八年，改元。')
-    ok('【' not in a2b and h2b == [], '民国三十八年不转换：%s' % a2b)
+    ok('【' not in a2b and h2b == [], '民国三十八年不转换（默认）：%s' % a2b)
     a2c, h2c = annotate('民国三十九年')
     ok('1950' in a2c, '民国三十九年→1950：%s' % a2c)
+    # 工具模式（allow_short_republic=True）：民国 1–38 年也换算
+    a2d, h2d = annotate('民国二十六年七七事变', allow_short_republic=True)
+    ok('1937' in a2d and '民国二十六年=1937年】' in a2d,
+       '民国 1–38 年在工具里可换算：%s' % a2d)
+    a2e, h2e = annotate('民国元年', allow_short_republic=True)
+    ok('1912' in a2e, '民国元年（工具）→1912：%s' % a2e)
+    ok(convert('民国三十八年', allow_short_republic=True)[0]['year'] == 1949,
+       '民国三十八年（工具）→1949')
+    # 越界纪年：康熙63年（康熙共61年）→ 1724，并提示该年实际纪年
+    a8, h8 = annotate('康熙六十三年')
+    ok('1724' in a8 and '存疑' in a8, '康熙63年→1724 并提示存疑：%s' % a8)
+    ok('雍正' in a8, '康熙63年提示该年实为雍正：%s' % a8)
+    a9, h9 = annotate('光绪三十五年')
+    ok('1909' in a9 and '存疑' in a9 and '宣统' in a9,
+       '光绪35年（仅 34 年）→1909 并提示宣统：%s' % a9)
+    # 反查注明年数
+    ok(era_year_cn(24) == '二十四' and era_year_cn(1) == '元', '年号年数写法 24→二十四 1→元')
+    fe = format_eras(1898)
+    ok('光绪二十四年' in fe and '明治三十一年' in fe and '同治' not in fe,
+       '反查 1898 注明年数（且不列已结束的年号）：%s' % fe)
+    ok([r['n'] for r in eras_in_year(1898) if r['era'] == '光绪'] == [24],
+       'eras_in_year(1898) 光绪 = 24 年')
     ap, hp = annotate_append('光绪二十四年戊戌')
     ok('【纪年换算】' in ap and '1898' in ap, '复制追加：%s' % ap)
 

@@ -12,6 +12,8 @@ import time
 import traceback
 from bisect import bisect_right
 
+_FULL_SCAN_MAX = 200      # batch16：PDF 深著录最多全文扫描的页数（超过则只用前后采样）
+
 from PyQt6.QtCore import (Qt, QEvent, QPoint, QProcess, QRect, QSize, QThread, QTimer,
                          QUrl, pyqtSignal)
 from PyQt6.QtGui import (QColor, QFont, QFontMetrics, QIcon, QImage, QKeySequence, QPainter,
@@ -30,6 +32,11 @@ from PyQt6.QtWidgets import (QApplication, QAbstractScrollArea, QCheckBox, QComb
 
 JSON_MAX_BYTES = 20 * 1024 * 1024    # JSON 树：超过此大小回退纯文本（或 ijson 流式）
 TEXT_MAX_BYTES = 64 * 1024 * 1024    # 文本阅读上限：超过只载入前 64 MB（状态栏提示，不静默丢弃）
+TEXT_DISPLAY_MAX = 8 * 1024 * 1024   # batch16：普通文本阅读最多载入前 8 MB（大 TXT 不再卡界面）
+DUAL_TXT_MAX = 8 * 1024 * 1024       # batch16：对读 TXT 最多载入前 8 MB
+DUAL_AUTO_MAX = 64 * 1024 * 1024     # batch16：TXT 超过此大小不自动进对读（只提示）
+# 可直接拖入 / 双击在阅读区打开的扩展名
+READER_EXTS = ('.pdf', '.txt', '.text', '.md', '.epub', '.json', '.csv')
 
 import viewer_core as C
 import viewer_meta as META
@@ -73,6 +80,26 @@ class BuildWorker(QThread):
             self.done.emit(r)
         except Exception as e:
             self.fail.emit('%s: %s' % (type(e).__name__, e))
+
+
+class MetaWorker(QThread):
+    """batch16：深著录解析放后台线程（大 PDF 读文字层可达 10s，不能卡 UI）。"""
+    done = pyqtSignal(str, float, object)     # path, mtime, meta
+
+    def __init__(self, name, path, mtime, parent=None):
+        super().__init__(parent)
+        self._n, self._p, self._t = name, path, mtime
+
+    def run(self):
+        m = None
+        try:
+            m = META.parse(self._n or '', self._p)
+        except Exception:
+            m = None
+        try:
+            self.done.emit(self._p, float(self._t), m)
+        except Exception:
+            pass
 
 
 class Wizard(QDialog):
@@ -1033,10 +1060,17 @@ class TxtSyncView(QTextEdit):
         self.idx = None
         self._syncing = False
         self._cur = 0
+        self.truncated = False      # batch16：TXT 过大时只载入前 DUAL_TXT_MAX
         self.verticalScrollBar().valueChanged.connect(self._on_scroll)
 
     def load(self, path):
-        txt = TOOLS._read_text(path)
+        try:
+            _sz = os.path.getsize(path)
+        except OSError:
+            _sz = 0
+        lim = DUAL_TXT_MAX if _sz > DUAL_TXT_MAX else 0
+        txt = TOOLS._read_text(path, lim)
+        self.truncated = bool(lim)
         self.setPlainText(txt)
         self.idx = TOOLS.SyncIndex(txt)
         self._cur = 0
@@ -1113,8 +1147,13 @@ class TextView(QTextEdit):
 
 
 class DualRead(QWidget):
-    """PDF（上）+ TXT（下）对读：页码双向同步。batch11 新增。"""
+    """PDF（左）+ TXT（右）左右并列对读，中间纵列是 PDF 导航；页码双向同步。
+
+    batch11 新增；batch14 改为左右两纵列 + 中间 PDF 导航页，并支持切换 TXT 版本与单独打开。
+    """
     pageChanged = pyqtSignal(int)          # PDF 页号（0 起），供主窗状态栏联动
+    txtChanged = pyqtSignal(str)           # 用户切换了 TXT 版本 → 主窗更新 _text_path
+    exitRequested = pyqtSignal(str)        # 点「只看 PDF / 只看 TXT」→ 'pdf' / 'text'
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -1122,37 +1161,75 @@ class DualRead(QWidget):
         self.txt = TxtSyncView()
         self._guard = False
         self._pdf_count = 0
-        bar = QHBoxLayout()
-        bar.setContentsMargins(0, 0, 0, 0)
-        bar.setSpacing(6)
-        self.lb = QLabel('对读：—')
+        self._txt_path = ''
+        # 中间纵列（PDF 导航页）：页码 / 翻页 / 同步 / 缩放 / TXT 版本 / 单独打开
+        nav = QWidget()
+        nv = QVBoxLayout(nav)
+        nv.setContentsMargins(4, 4, 4, 4)
+        nv.setSpacing(5)
+        self.lb = QLabel('对读')
+        self.lb.setWordWrap(True)
+        nv.addWidget(self.lb)
+        nv.addWidget(QLabel('PDF 导航'))
         self.cb_sync = QCheckBox('同步翻页')
         self.cb_sync.setChecked(True)
+        nv.addWidget(self.cb_sync)
+        nv.addWidget(QLabel('页'))
         self.ed = QLineEdit()
-        self.ed.setFixedWidth(52)
+        self.ed.setFixedWidth(56)
+        self.ed.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.ed.returnPressed.connect(self._jump)
+        nv.addWidget(self.ed)
         b_go = QPushButton('跳页')
         b_go.clicked.connect(self._jump)
+        nv.addWidget(b_go)
+        pn = QHBoxLayout()
+        pn.setSpacing(2)
+        self.b_first = QPushButton('⏮')
+        self.b_prev = QPushButton('◀')
+        self.b_next = QPushButton('▶')
+        self.b_last = QPushButton('⏭')
+        for _b in (self.b_first, self.b_prev, self.b_next, self.b_last):
+            _b.setMaximumWidth(30)
+            pn.addWidget(_b)
+        self.b_first.clicked.connect(self._first)
+        self.b_prev.clicked.connect(lambda: self._step(-1))
+        self.b_next.clicked.connect(lambda: self._step(1))
+        self.b_last.clicked.connect(self._last)
+        nv.addLayout(pn)
         self.cb_fit = QComboBox()
         self.cb_fit.addItems(['适应宽度', '适应页面', '100%'])
         self.cb_fit.setCurrentIndex(1)
         self.cb_fit.currentIndexChanged.connect(self._fit)
-        bar.addWidget(self.lb)
-        bar.addWidget(self.cb_sync)
-        bar.addStretch(1)
-        bar.addWidget(QLabel('页'))
-        bar.addWidget(self.ed)
-        bar.addWidget(b_go)
-        bar.addWidget(self.cb_fit)
-        sp = QSplitter(Qt.Orientation.Vertical)
+        nv.addWidget(self.cb_fit)
+        nv.addWidget(QLabel('TXT 版本'))
+        self.cb_txt = QComboBox()
+        self.cb_txt.setToolTip('切换对读用的 TXT（不同 OCR / 繁简版本）')
+        self.cb_txt.currentIndexChanged.connect(self._switch_txt)
+        nv.addWidget(self.cb_txt)
+        self.b_pdf_only = QPushButton('只看 PDF')
+        self.b_pdf_only.setToolTip('退出对读，只显示 PDF（保持当前页）')
+        self.b_pdf_only.clicked.connect(lambda: self._single('pdf'))
+        self.b_txt_only = QPushButton('只看 TXT')
+        self.b_txt_only.setToolTip('退出对读，只显示 TXT')
+        self.b_txt_only.clicked.connect(lambda: self._single('text'))
+        nv.addWidget(self.b_pdf_only)
+        nv.addWidget(self.b_txt_only)
+        nv.addStretch(1)
+        nav.setMinimumWidth(118)
+        nav.setMaximumWidth(196)
+        sp = QSplitter(Qt.Orientation.Horizontal)
         sp.addWidget(self.pdf)
+        sp.addWidget(nav)
         sp.addWidget(self.txt)
-        sp.setSizes([520, 320])
+        sp.setSizes([620, 150, 540])
+        sp.setStretchFactor(0, 3)
+        sp.setStretchFactor(1, 0)
+        sp.setStretchFactor(2, 3)
         sp.setChildrenCollapsible(False)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(2)
-        lay.addLayout(bar)
         lay.addWidget(sp, 1)
         self.pdf.pageChanged.connect(self._on_pdf_page)
         self.txt.pageChanged.connect(self._on_txt_page)
@@ -1164,6 +1241,7 @@ class DualRead(QWidget):
             self.pdf.set_document(doc, max(0, int(first) - 1), 1.0)
             self._pdf_count = int(getattr(doc, 'page_count', 0) or 0)
             self.txt.load(txt_path)
+            self._txt_path = txt_path
             self._set_fit(fit)
             self.txt.goto_number(int(first))
             try:
@@ -1172,9 +1250,12 @@ class DualRead(QWidget):
                 pass
             try:
                 import os as _os
-                self.lb.setText('对读：《%s》 ｜ PDF %d 页 / TXT %d 页（按页码标记同步）'
+                _tail = '｜TXT 过大，仅前 %d MB' % (DUAL_TXT_MAX // 1048576) \
+                    if getattr(self.txt, 'truncated', False) else ''
+                self.lb.setText('对读：《%s》 ｜ PDF %d 页 / TXT %d 页%s（按页码标记同步）'
                                 % (_os.path.basename(txt_path),
-                                   self._pdf_count, self.txt.idx.page_count if self.txt.idx else 0))
+                                   self._pdf_count, self.txt.idx.page_count if self.txt.idx else 0,
+                                   _tail))
             except Exception:
                 self.lb.setText('对读：已加载')
         finally:
@@ -1199,6 +1280,64 @@ class DualRead(QWidget):
         else:
             self.pdf.set_fit(None)
             self.pdf.set_zoom(1.0)
+
+    # ---- batch14：TXT 版本切换 / 单独打开 / 跳页面控
+    def set_txt_list(self, items):
+        """items: [(标签, 路径), …] —— 对读时可切换的 TXT 版本。"""
+        self.cb_txt.blockSignals(True)
+        self.cb_txt.clear()
+        for label, path in (items or []):
+            self.cb_txt.addItem(str(label), path)
+        if items:
+            i = self.cb_txt.findData(self._txt_path)
+            self.cb_txt.setCurrentIndex(i if i >= 0 else 0)
+        self.cb_txt.blockSignals(False)
+        self.cb_txt.setEnabled(self.cb_txt.count() > 1)
+
+    def _switch_txt(self, i):
+        p = self.cb_txt.itemData(i)
+        if not p or p == self._txt_path:
+            return
+        if self.load_txt(p):
+            self.txtChanged.emit(p)
+
+    def load_txt(self, path):
+        """换一个 TXT 并重新对齐到当前页。"""
+        try:
+            if not self.txt.load(path):
+                return False
+        except Exception:
+            return False
+        self._txt_path = path
+        try:
+            n = int(re.sub(r'\D', '', self.ed.text()) or '1')
+        except Exception:
+            n = 1
+        self._guard = True
+        try:
+            self.txt.goto_number(n)
+        finally:
+            self._guard = False
+        return True
+
+    def _first(self):
+        self.ed.setText('1')
+        self._jump()
+
+    def _last(self):
+        self.ed.setText(str(max(1, int(self._pdf_count or 1))))
+        self._jump()
+
+    def _step(self, d):
+        try:
+            n = int(re.sub(r'\D', '', self.ed.text()) or '1') + int(d)
+        except Exception:
+            n = 1
+        self.ed.setText(str(max(1, n)))
+        self._jump()
+
+    def _single(self, which):
+        self.exitRequested.emit(str(which))
 
     # ---- 同步
     def _on_pdf_page(self, i):
@@ -1485,6 +1624,8 @@ class MainWindow(QMainWindow):
         self._chronok.activated.connect(self.chrono_dialog)
         self._aliask = QShortcut(QKeySequence('Ctrl+Shift+A'), self)
         self._aliask.activated.connect(self.alias_dialog)
+        self._excvk = QShortcut(QKeySequence('Ctrl+Shift+M'), self)
+        self._excvk.activated.connect(self.excerpt_viewer)
         self.st.setdefault('auto_dual', True)     # 打开 TXT 且有同名 PDF → 自动对读
         self._suppress_dual = False               # 版本切换等场景临时禁用自动对读
         # batch3：MD 渲染 / JSON 树 / 相关文件 / 缩略图
@@ -1551,6 +1692,10 @@ class MainWindow(QMainWindow):
             self.setWindowIcon(QIcon(icon_path()))
         self._ui()
         self._refresh_status()
+        try:
+            self.setAcceptDrops(True)         # batch15：支持把 PDF / TXT 拖进来打开
+        except Exception:
+            pass
 
     def _ui(self):
         cen = QWidget()
@@ -1586,7 +1731,7 @@ class MainWindow(QMainWindow):
         self.tb.itemSelectionChanged.connect(self.on_pick)
         self.tb.itemDoubleClicked.connect(self._on_item_dbl)
         self.tb.itemClicked.connect(self._on_item_click)      # 单击文件名即打开
-        self.tb.setMinimumWidth(260)          # 分割条拖到极左也不会挤没
+        self.tb.setMinimumWidth(90)           # batch14：用户可把左栏拖得很窄
         self.tb.setMaximumWidth(880)          # 上限（resizeEvent 里再按窗口比例收紧）
         # 命中关键词在文件名列黄底高亮
         self._last_kw = ''
@@ -1610,9 +1755,13 @@ class MainWindow(QMainWindow):
         self.b_alias = QPushButton('👤 人名别名')
         self.b_alias.setToolTip('近代人物字号/笔名/化名归一：检索人物名时可一并检索其别名（Ctrl+Shift+A）')
         self.b_alias.clicked.connect(self.alias_dialog)
+        self.b_exc = QPushButton('🗂 摘录本')
+        self.b_exc.setToolTip('查看 / 编辑已摘录的资料（Ctrl+Shift+M）')
+        self.b_exc.clicked.connect(self.excerpt_viewer)
         lh.addWidget(self.b_fts)
         lh.addWidget(self.b_fts_hist)
         lh.addWidget(self.b_alias)
+        lh.addWidget(self.b_exc)
         lh.addStretch(1)
         lv.addLayout(lh)
         lv.addWidget(self.tb, 1)
@@ -1655,7 +1804,9 @@ class MainWindow(QMainWindow):
         trow.setSpacing(4)
         trow.addWidget(QLabel('版本'))
         self.cb_ver = QComboBox()
-        self.cb_ver.setMaximumWidth(190)
+        self.cb_ver.setMinimumWidth(160)          # batch14：不再把「版本」显示不全
+        self.cb_ver.setMaximumWidth(360)
+        self.cb_ver.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.cb_ver.currentIndexChanged.connect(self.on_ver)
         trow.addWidget(self.cb_ver)
         self.b_info = QPushButton('ⓘ 详情')
@@ -1770,9 +1921,12 @@ class MainWindow(QMainWindow):
         _bfoot.setToolTip('把选中引文做成带出处的脚注，粘贴到 Word 即成真脚注（Ctrl+Shift+I）')
         _bfoot.clicked.connect(self.footnote_here)
         _bchrono = QPushButton('⌛ 纪年换算')
-        _bchrono.setToolTip('民国 / 年号 / 干支纪年 ⇄ 公元年（Ctrl+Shift+Y）')
+        _bchrono.setToolTip('民国 / 年号 / 干支纪年 ⇄ 公元年（含民国 1–38 年）（Ctrl+Shift+Y）')
         _bchrono.clicked.connect(self.chrono_dialog)
-        self._btn_widgets += [_bsnap, _bexc, _bdual, _bfoot, _bchrono]
+        _bexcv = QPushButton('🗂 摘录本')
+        _bexcv.setToolTip('查看 / 编辑已摘录的资料（Ctrl+Shift+M）')
+        _bexcv.clicked.connect(self.excerpt_viewer)
+        self._btn_widgets += [_bsnap, _bexc, _bdual, _bfoot, _bchrono, _bexcv]
         for x in self._btn_widgets:
             row.addWidget(x)
         rv.addWidget(self.lb_info)
@@ -2392,7 +2546,11 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def closeEvent(self, ev):
-        """关窗：结算最后一次阅读时长（写 settings，异常静默）+ 记住窗口布局。"""
+        """关窗：停后台深著录线程 + 结算最后一次阅读时长（写 settings，异常静默）+ 记住窗口布局。"""
+        try:
+            self._stop_meta_worker()
+        except Exception:
+            pass
         try:
             self._stat_flush()
         except Exception:
@@ -2456,48 +2614,139 @@ class MainWindow(QMainWindow):
         return self.rows[i] if 0 <= i < len(self.rows) else None
 
     def on_pick(self):
+        """选中一项 → 立即用「浅著录」显示详情（不阻塞），深著录（读 PDF 文字层）放后台线程。 batch16"""
         r = self._cur()
         if not r:
             return
         p = os.path.join(r.get('dir') or '', r.get('name') or '')
         try:
-            _key = (p, os.path.getmtime(p))
+            mtime = os.path.getmtime(p)
         except OSError:
-            _key = (p, 0)
-        if not hasattr(self, '_meta_cache'):
-            self._meta_cache = {}
-        if self._meta_cache.get('_k') == _key and self._meta_cache.get('_m') is not None:
-            self.meta = self._meta_cache['_m']          # batch9：同一文件不重复深度解析
-        else:
-            try:
-                self.meta = META.parse(r.get('name') or '', p)
-            except Exception:
-                self.meta = {'name': r.get('name') or '', 'volume': '', 'author': '',
-                             'publisher': '', 'year': '', 'ssid': '', 'trad': False,
-                             'ext': '', 'tail': '', 'path': p, 'raw': r.get('name') or ''}
-            self._meta_cache = {'_k': _key, '_m': self.meta}
-        m = self.meta
-        bits = [b for b in (m.get('author'), m.get('volume'), m.get('publisher'),
-                            ((m.get('year') or '') + '年') if m.get('year') else '',
-                            ('SSID ' + m['ssid']) if m.get('ssid') else '',
-                            '【繁体】' if m.get('trad') else '') if b]
-        info = ('<b>%s</b><br>%s<br>%.1f KB ｜ %s<br>'
-                '<span style="color:#1e7a6f">%s</span>'
-                % (m.get('name') or r.get('name'), p,
-                   (r.get('size') or 0) / 1024.0, _ts(r.get('mtime')),
-                   ' ｜ '.join(bits) or '（文件名里没有元数据）'))
-        _rb = self._rights_text(m)
-        if _rb:
-            info += '<br><span style="color:#8a5a00">版权/授权：%s</span>' % _rb
-        self.lb_info.setText(info)
+            mtime = 0.0
         try:
+            nkey = os.path.normcase(os.path.abspath(p))
+        except Exception:
+            nkey = p
+        key = (nkey, round(float(mtime), 3))
+        cache = getattr(self, '_meta_map', None)
+        if cache is None:
+            cache = self._meta_map = {}
+        m = cache.get(key)
+        deep = bool(m is not None and m.get('_deep'))
+        if m is None:
+            try:
+                m = META.parse(r.get('name') or '', p, deep=False)
+            except Exception:
+                m = {'name': r.get('name') or '', 'volume': '', 'author': '',
+                     'publisher': '', 'year': '', 'ssid': '', 'trad': False,
+                     'ext': '', 'tail': '', 'path': p, 'raw': r.get('name') or ''}
+            if len(cache) > 400:
+                cache.clear()
+            cache[key] = m
+        self.meta = m
+        self._meta_cache = {'_k': (p, mtime), '_m': m}      # 兼容旧引用
+        self._render_info(r, m)
+        self._fill_versions(m)
+        if not deep:
+            self._request_deep_meta(r.get('name') or '', p, mtime, key)
+
+    def _render_info(self, r, m):
+        """把著录信息写进详情条（浅/深著录共用）。"""
+        try:
+            p = os.path.join(r.get('dir') or '', r.get('name') or '')
+            bits = [b for b in (m.get('author'), m.get('volume'), m.get('publisher'),
+                                ((m.get('year') or '') + '年') if m.get('year') else '',
+                                ('SSID ' + m['ssid']) if m.get('ssid') else '',
+                                '【繁体】' if m.get('trad') else '') if b]
+            info = ('<b>%s</b><br>%s<br>%.1f KB ｜ %s<br>'
+                    '<span style="color:#1e7a6f">%s</span>'
+                    % (m.get('name') or r.get('name'), p,
+                       (r.get('size') or 0) / 1024.0, _ts(r.get('mtime')),
+                       ' ｜ '.join(bits) or '（文件名里没有元数据）'))
+            _rb = self._rights_text(m)
+            if _rb:
+                info += '<br><span style="color:#8a5a00">版权/授权：%s</span>' % _rb
+            if not m.get('_deep'):
+                info += '<br><span style="color:#888">（正在后台深度著录…）</span>'
+            self.lb_info.setText(info)
             _tip = (re.sub(r'<br\s*/?>', '\n', info).replace('&nbsp;', ' ')
                     .replace('&lt;', '<').replace('&gt;', '>').replace('&amp;', '&'))
             self.lb_info.setToolTip(_tip)
             self.b_info.setToolTip('文件详情（默认隐藏）：\n' + _tip)
         except Exception:
             pass
-        self._fill_versions(m)
+
+    # ---- batch16：后台深著录（不卡界面）
+    def _stop_meta_worker(self, ms=4000):
+        """关窗/退出前等后台线程结束（QThread 运行中被销毁会触发原生 fail-fast）。"""
+        self._meta_closing = True
+        self._meta_pending = None
+        w = getattr(self, '_meta_worker', None)
+        try:
+            if w is not None and w.isRunning():
+                w.wait(int(ms))
+        except Exception:
+            pass
+
+    def _request_deep_meta(self, name, path, mtime, key):
+        if getattr(self, '_meta_closing', False):
+            return
+        cur = getattr(self, '_meta_worker', None)
+        if cur is not None and cur.isRunning():
+            self._meta_pending = (name, path, mtime, key)
+            return
+        try:
+            w = MetaWorker(name, path, mtime, self)
+        except Exception:
+            return
+        w.done.connect(self._on_deep_meta)
+        self._meta_worker = w
+        self._meta_pending = None
+        try:
+            w.start()
+        except Exception:
+            pass
+
+    def _on_deep_meta(self, path, mtime, m):
+        try:
+            if m:
+                m['_deep'] = True
+                try:
+                    nkey = os.path.normcase(os.path.abspath(path))
+                except Exception:
+                    nkey = path
+                key = (nkey, round(float(mtime), 3))
+                if getattr(self, '_meta_map', None) is None:
+                    self._meta_map = {}
+                self._meta_map[key] = m
+                r = self._cur()
+                cp = os.path.join(r.get('dir') or '', r.get('name') or '') if r else ''
+                if r and os.path.normcase(os.path.abspath(cp)) == nkey:
+                    self.meta = m
+                    self._meta_cache = {'_k': (cp, mtime), '_m': m}
+                    self._render_info(r, m)
+        except Exception:
+            pass
+        finally:
+            pend = getattr(self, '_meta_pending', None)
+            self._meta_pending = None
+            if pend:
+                self._request_deep_meta(*pend)
+            else:
+                # 当前项仍是浅著录 → 继续补深著录
+                try:
+                    r = self._cur()
+                    if r:
+                        p = os.path.join(r.get('dir') or '', r.get('name') or '')
+                        mm = self._meta_map.get((os.path.normcase(os.path.abspath(p)),
+                                                 round(float(os.path.getmtime(p)), 3)))
+                        if mm is not None and not mm.get('_deep'):
+                            self._request_deep_meta(r.get('name') or '', p,
+                                                    os.path.getmtime(p),
+                                                    (os.path.normcase(os.path.abspath(p)),
+                                                     round(float(os.path.getmtime(p)), 3)))
+                except Exception:
+                    pass
 
     def _rights_text(self, m):
         """把版权/授权信息拼成一行（标注来源：文件名 / 上级目录 / 版权页）。"""
@@ -2586,6 +2835,85 @@ class MainWindow(QMainWindow):
         self._show_nav(0)
         self.statusBar().showMessage('目录：%d 项（Ctrl+T 显示/隐藏）' % n)
 
+    def open_path_in_reader(self, p, note=''):
+        """把某个文件在阅读区内部打开，并尽量在列表里选中它（拖入 / 命令行共用）。"""
+        try:
+            self.ed_kw.setText(os.path.splitext(os.path.basename(p))[0])
+            self.do_search()
+            want = os.path.normcase(os.path.abspath(p))
+            cur = -1
+            for i, r in enumerate(self.rows):
+                rp = os.path.normcase(os.path.abspath(
+                    os.path.join(r.get('dir') or '', r.get('name') or '')))
+                if rp == want:
+                    cur = i
+                    break
+            if cur < 0 and self.rows:
+                cur = 0                      # 库里没登记 → 仍打开文件，列表选第一个同名词
+            if cur >= 0:
+                self.tb.setCurrentCell(cur, 0)
+                self.on_pick()
+        except Exception:
+            pass
+        ok = self._open_path(p)              # 一律在阅读区内部打开（PDF/EPUB/文本）
+        if ok:
+            self._say('已在阅读区打开：%s%s' % (os.path.basename(p), note or ''), hold=1.5)
+        return ok
+
+    # ---- batch15：拖入文件即打开（PDF / TXT 等）
+    def _url_reader_ok(self, u):
+        try:
+            p = u.toLocalFile()
+            return bool(p) and os.path.isfile(p) and \
+                os.path.splitext(p)[1].lower() in READER_EXTS
+        except Exception:
+            return False
+
+    def dragEnterEvent(self, ev):
+        try:
+            md = ev.mimeData()
+            if md is not None and md.hasUrls() and any(self._url_reader_ok(u) for u in md.urls()):
+                ev.acceptProposedAction()
+                return
+        except Exception:
+            pass
+        try:
+            ev.ignore()
+        except Exception:
+            pass
+
+    def dragMoveEvent(self, ev):
+        try:
+            ev.acceptProposedAction()
+        except Exception:
+            pass
+
+    def dropEvent(self, ev):
+        """把拖入的 PDF / TXT（可多选）在阅读区打开；多个时只开第一个并提示。"""
+        paths = []
+        try:
+            for u in ev.mimeData().urls():
+                p = u.toLocalFile()
+                if p and os.path.isfile(p):
+                    paths.append(os.path.abspath(p))
+        except Exception:
+            paths = []
+        try:
+            ev.acceptProposedAction()
+        except Exception:
+            pass
+        if not paths:
+            self.statusBar().showMessage('拖入的内容不是文件（支持把 PDF / TXT 等文件拖进来）')
+            return
+        p = paths[0]
+        ext = os.path.splitext(p)[1].lower()
+        if ext not in READER_EXTS:
+            self.statusBar().showMessage('这个格式暂不支持在阅读区打开：%s' % os.path.basename(p))
+            return
+        note = ('（另有 %d 个拖入文件已忽略）' % (len(paths) - 1)) if len(paths) > 1 else ''
+        self.open_path_in_reader(p, note)
+        self._hist_add()
+
     def open_cli_arg(self):
         """双击关联 / 命令行带文件启动：一律先在阅读区内部打开（不甩给外部程序）。
         多个文件参数时打开第一个，其余在状态栏提示（未入列表）。
@@ -2604,31 +2932,10 @@ class MainWindow(QMainWindow):
         if not files:
             return
         p = files[0]
-        try:
-            self.ed_kw.setText(os.path.splitext(os.path.basename(p))[0])
-            self.do_search()
-            want = os.path.normcase(p)
-            cur = -1
-            for i, r in enumerate(self.rows):
-                rp = os.path.normcase(os.path.abspath(
-                    os.path.join(r.get('dir') or '', r.get('name') or '')))
-                if rp == want:
-                    cur = i
-                    break
-            if cur < 0 and self.rows:
-                cur = 0                      # 库里没登记 → 仍打开文件，列表选第一个同名词
-            if cur >= 0:
-                self.tb.setCurrentCell(cur, 0)
-                self.on_pick()
-        except Exception:
-            pass
-        ok = self._open_path(p)              # 一律在阅读区内部打开（PDF/EPUB/文本）
-        if ok:
-            tail = ''
-            if len(files) > 1:
-                tail = '（另有 %d 个文件参数已忽略）' % (len(files) - 1)
-            self._say('已在阅读区打开：%s%s'
-                      % (os.path.basename(p), tail), hold=1.5)
+        tail = ''
+        if len(files) > 1:
+            tail = '（另有 %d 个文件参数已忽略）' % (len(files) - 1)
+        self.open_path_in_reader(p, tail)
 
     def epub_here(self):
         """用 PDF 引擎直接打开当前项（支持 EPUB；也可以打开 PDF）。Ctrl+E"""
@@ -3747,7 +4054,9 @@ class MainWindow(QMainWindow):
         dlg.resize(780, 640)
         vb = QVBoxLayout(dlg)
         vb.addWidget(QLabel('把带纪年的文字（民国 / 年号 / 干支）粘到下面，点「换算」：'
-                            '每个纪年后会加【=公元年】；干支会列出 1700–2000 年全部对应年份。'))
+                            '每个纪年后会加【=公元年】；民国 1～38 年也会换算；'
+                            '越界纪年（如康熙63年）会算出公元年并提示该年实际纪年；'
+                            '干支会列出 1700–2000 年全部对应年份。'))
         ed_in = QTextEdit()
         vb.addWidget(ed_in, 1)
         row = QHBoxLayout()
@@ -3776,7 +4085,7 @@ class MainWindow(QMainWindow):
         ed_in.setPlainText(pre or '')
 
         def do_conv():
-            ann, hits = CHRONO.annotate(ed_in.toPlainText())
+            ann, hits = CHRONO.annotate(ed_in.toPlainText(), allow_short_republic=True)
             ed_out.setPlainText(ann)
             self.statusBar().showMessage('纪年换算：命中 %d 处' % len(hits))
 
@@ -3798,11 +4107,17 @@ class MainWindow(QMainWindow):
                                          1898, 1000, 2100, 1)
             if not okk:
                 return
-            eras = CHRONO.year_eras(y)
+            eras = CHRONO.format_eras(y)          # 每个年号都注明「是第几年」
+            gz_note = ''
+            try:
+                gz_note = CHRONO.year_to_ganzhi(y)
+            except Exception:
+                pass
             lines = ['公元 %d 年：' % y,
-                     '干支：%s' % CHRONO.year_to_ganzhi(y),
-                     '在用的年号（约）：%s' % ('、'.join(eras) or '—'),
-                     ('民国纪年：民国 %d 年' % (y - 1911)) if y >= 1912 else '（无民国纪年）']
+                     '干支：%s' % gz_note,
+                     '在用的年号：%s' % (eras or '—'),
+                     ('民国纪年：民国 %s年' % CHRONO.era_year_cn(y - 1911))
+                     if y >= 1912 else '（无民国纪年）']
             ed_out.setPlainText('\n'.join(lines))
 
         b_conv.clicked.connect(do_conv)
@@ -3813,6 +4128,236 @@ class MainWindow(QMainWindow):
         self._last_chrono = {'in': ed_in, 'out': ed_out, 'dlg': dlg}
         if (pre or '').strip():
             do_conv()
+        dlg.exec()
+
+    # ---- ⑥ 摘录资料 查看 / 编辑（🗂 / Ctrl+Shift+M）
+    def excerpt_viewer(self):
+        """查看 + 编辑「摘录本」；另有「截图本」页签（可预览 / 打开图片）。"""
+        from PyQt6.QtWidgets import (QTabWidget, QListWidget, QListWidgetItem,
+                                     QPlainTextEdit)
+        from PyQt6.QtGui import QPixmap
+        dlg = QDialog(self)
+        dlg.setWindowTitle('摘录资料（摘录本 / 截图本）')
+        dlg.resize(960, 660)
+        vb = QVBoxLayout(dlg)
+        tabs = QTabWidget()
+        vb.addWidget(tabs, 1)
+
+        # ---------- 摘录本（可编辑）
+        page = QWidget()
+        pv = QHBoxLayout(page)
+        lcol = QVBoxLayout()
+        self._exc_filter = QLineEdit()
+        self._exc_filter.setPlaceholderText('过滤：书名 / 关键词')
+        lcol.addWidget(self._exc_filter)
+        lst = QListWidget()
+        lcol.addWidget(lst, 1)
+        lrow = QHBoxLayout()
+        b_new = QPushButton('＋ 新增')
+        b_del = QPushButton('－ 删除')
+        b_up = QPushButton('↑ 上移')
+        b_dn = QPushButton('↓ 下移')
+        for x in (b_new, b_del, b_up, b_dn):
+            lrow.addWidget(x)
+        lcol.addLayout(lrow)
+        rcol = QVBoxLayout()
+        rcol.addWidget(QLabel('正文（可编辑）：'))
+        ed_body = QPlainTextEdit()
+        rcol.addWidget(ed_body, 3)
+        rcol.addWidget(QLabel('出处（书名 / 页码 / 版本 …，可编辑）：'))
+        ed_cite = QPlainTextEdit()
+        ed_cite.setMaximumHeight(90)
+        rcol.addWidget(ed_cite, 1)
+        brow = QHBoxLayout()
+        b_save = QPushButton('保存本条')
+        b_save_all = QPushButton('保存全部')
+        b_open = QPushButton('打开摘录本.md')
+        b_reload = QPushButton('重新载入')
+        b_close = QPushButton('关闭')
+        for x in (b_save, b_save_all, b_open, b_reload):
+            brow.addWidget(x)
+        brow.addStretch(1)
+        brow.addWidget(b_close)
+        rcol.addLayout(brow)
+        pv.addLayout(lcol, 1)
+        pv.addLayout(rcol, 1)
+        tabs.addTab(page, '摘录本')
+
+        # ---------- 截图本（可预览）
+        sp = QWidget()
+        sv = QHBoxLayout(sp)
+        slist = QListWidget()
+        sprev = QLabel('选一张截图预览')
+        sprev.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sprev.setMinimumWidth(380)
+        sbtn = QVBoxLayout()
+        b_sopen = QPushButton('用系统看图打开')
+        b_sdir = QPushButton('打开截图本文件夹')
+        b_srefresh = QPushButton('刷新')
+        for x in (b_sopen, b_sdir, b_srefresh):
+            sbtn.addWidget(x)
+        sbtn.addStretch(1)
+        sv.addWidget(slist, 1)
+        sv.addWidget(sprev, 2)
+        sv.addLayout(sbtn)
+        tabs.addTab(sp, '截图本')
+
+        state = {'recs': [], 'cur': -1}
+
+        def open_any(p):
+            try:
+                os.startfile(p)
+            except Exception:
+                try:
+                    self._open_path(p)
+                except Exception:
+                    self.statusBar().showMessage('打不开：%s' % p)
+
+        def refresh_snaps():
+            slist.clear()
+            for s in TOOLS.list_snapshots():
+                it = QListWidgetItem(s['name'])
+                it.setData(Qt.ItemDataRole.UserRole, s['path'])
+                slist.addItem(it)
+
+        def show_snap(*_):
+            it = slist.currentItem()
+            if not it:
+                return
+            pm = QPixmap(it.data(Qt.ItemDataRole.UserRole))
+            if pm.isNull():
+                sprev.setText('打不开图片')
+            else:
+                sprev.setPixmap(pm.scaled(max(380, sprev.width() - 10), 520,
+                                          Qt.AspectRatioMode.KeepAspectRatio,
+                                          Qt.TransformationMode.SmoothTransformation))
+
+        def row_of(idx, widget):
+            for k in range(widget.count()):
+                if int(widget.item(k).data(Qt.ItemDataRole.UserRole)) == idx:
+                    return k
+            return 0
+
+        def refresh_list(keep=-1):
+            lst.blockSignals(True)
+            lst.clear()
+            kw = (self._exc_filter.text() or '').strip().lower()
+            for i, r in enumerate(state['recs']):
+                line = (r.get('body') or '').splitlines()
+                line = line[0] if line else ''
+                txt = '%s ｜ %s' % (r.get('ts') or '（无时间）', line[:40])
+                hay = (txt + (r.get('body') or '') + (r.get('cite') or '')).lower()
+                if kw and kw not in hay:
+                    continue
+                it = QListWidgetItem(txt)
+                it.setData(Qt.ItemDataRole.UserRole, i)
+                lst.addItem(it)
+            lst.blockSignals(False)
+            if lst.count() and keep >= 0:
+                lst.setCurrentRow(row_of(keep, lst))
+            elif lst.count():
+                lst.setCurrentRow(0)
+            else:
+                ed_body.setPlainText('')
+                ed_cite.setPlainText('')
+                state['cur'] = -1
+
+        def load_cur(*_):
+            it = lst.currentItem()
+            if not it:
+                return
+            i = int(it.data(Qt.ItemDataRole.UserRole))
+            if not (0 <= i < len(state['recs'])):
+                return
+            state['cur'] = i
+            ed_body.setPlainText(state['recs'][i].get('body') or '')
+            ed_cite.setPlainText(state['recs'][i].get('cite') or '')
+
+        def push_cur():
+            i = state['cur']
+            if i < 0:
+                return False
+            state['recs'][i]['body'] = ed_body.toPlainText().strip('\n')
+            state['recs'][i]['cite'] = ed_cite.toPlainText().strip('\n')
+            return True
+
+        def do_save_cur():
+            if push_cur():
+                refresh_list(state['cur'])
+                self.statusBar().showMessage('已更新本条（记得「保存全部」写回文件）')
+
+        def do_save_all():
+            push_cur()
+            try:
+                p = TOOLS.write_excerpts(state['recs'])
+                self.statusBar().showMessage('已保存摘录本：%s（共 %d 条）'
+                                             % (os.path.basename(p), len(state['recs'])))
+            except Exception as e:
+                self.statusBar().showMessage('保存失败：%s' % e)
+
+        def do_new():
+            push_cur()
+            import time as _t
+            state['recs'].insert(0, {'ts': _t.strftime('%Y-%m-%d %H:%M:%S'),
+                                     'body': '', 'cite': ''})
+            refresh_list(0)
+            lst.setCurrentRow(0)
+            ed_body.setFocus()
+
+        def do_del():
+            it = lst.currentItem()
+            if not it:
+                return
+            i = int(it.data(Qt.ItemDataRole.UserRole))
+            if QMessageBox.question(dlg, '删除摘录',
+                                    '确定删除这一条摘录？') != QMessageBox.StandardButton.Yes:
+                return
+            if not (0 <= i < len(state['recs'])):
+                return
+            state['recs'].pop(i)
+            state['cur'] = -1
+            refresh_list(min(i, len(state['recs']) - 1) if state['recs'] else -1)
+
+        def do_move(d):
+            it = lst.currentItem()
+            if not it:
+                return
+            i = int(it.data(Qt.ItemDataRole.UserRole))
+            j = i + d
+            if not (0 <= j < len(state['recs'])):
+                return
+            push_cur()
+            state['recs'][i], state['recs'][j] = state['recs'][j], state['recs'][i]
+            refresh_list(j)
+
+        def do_reload():
+            try:
+                state['recs'] = TOOLS.read_excerpts()
+            except Exception:
+                state['recs'] = []
+            state['cur'] = -1
+            refresh_list()
+
+        lst.currentItemChanged.connect(load_cur)
+        self._exc_filter.textChanged.connect(lambda *_: refresh_list(state['cur']))
+        b_new.clicked.connect(do_new)
+        b_del.clicked.connect(do_del)
+        b_up.clicked.connect(lambda: do_move(-1))
+        b_dn.clicked.connect(lambda: do_move(1))
+        b_save.clicked.connect(do_save_cur)
+        b_save_all.clicked.connect(do_save_all)
+        b_reload.clicked.connect(do_reload)
+        b_open.clicked.connect(lambda: open_any(TOOLS.excerpt_target_path()))
+        b_close.clicked.connect(dlg.accept)
+        slist.currentItemChanged.connect(show_snap)
+        b_srefresh.clicked.connect(refresh_snaps)
+        b_sopen.clicked.connect(lambda: (slist.currentItem() and
+                                         open_any(slist.currentItem().data(Qt.ItemDataRole.UserRole))))
+        b_sdir.clicked.connect(lambda: open_any(TOOLS.record_dir(TOOLS._SNAPSHOT_DIR)))
+        refresh_snaps()
+        do_reload()
+        self._last_excerpt_dlg = {'dlg': dlg, 'list': lst, 'body': ed_body,
+                                  'cite': ed_cite, 'tabs': tabs, 'recs': state}
         dlg.exec()
 
     # ---- ⑤ 注释一键插入（脚注，❞ / Ctrl+Shift+I）
@@ -3898,6 +4443,15 @@ class MainWindow(QMainWindow):
                 return False
             if not self.st.get('auto_dual', True):
                 return False
+            try:                                  # batch16：过大 TXT 不自动进对读（会很卡 / 且只能截断）
+                if os.path.getsize(txt_path) > DUAL_TXT_MAX:
+                    self.statusBar().showMessage(
+                        '这个 TXT 较大（%.0f MB）：未自动进入对读'
+                        '（对读只载入前 %d MB）；可点「⇄ 对读」手动打开'
+                        % (os.path.getsize(txt_path) / 1048576.0, DUAL_TXT_MAX // 1048576))
+                    return False
+            except OSError:
+                pass
             pdfs = []
             if hasattr(META, '_sibling_pdfs'):
                 pdfs = [x for x in META._sibling_pdfs(txt_path) if x.lower().endswith('.pdf')]
@@ -3906,6 +4460,78 @@ class MainWindow(QMainWindow):
             return self._enter_dual(txt_path, pdfs[0])
         except Exception:
             return False
+
+    def _dual_txt_variants(self, txt_path, pdf_path=''):
+        """同一本书可用的 TXT 版本：[(标签, 路径)]（含繁简 / 不同 OCR 版本）。"""
+        items, seen = [], set()
+
+        def add(p):
+            if not p or not os.path.isfile(p):
+                return
+            k = os.path.normcase(os.path.abspath(p))
+            if k in seen:
+                return
+            seen.add(k)
+            base = os.path.basename(p)
+            items.append(('当前：%s' % base if p == txt_path else base, p))
+
+        add(txt_path)
+        try:
+            for fn in (META._sibling_texts(txt_path) if hasattr(META, '_sibling_texts') else []):
+                add(fn)
+        except Exception:
+            pass
+        if pdf_path:
+            try:
+                d = os.path.dirname(os.path.abspath(pdf_path))
+                key = META.family_key(os.path.basename(pdf_path))
+                for fn in os.listdir(d):
+                    if fn.lower().endswith(('.txt', '.text')) and META.family_key(fn) == key:
+                        add(os.path.join(d, fn))
+            except OSError:
+                pass
+        return items
+
+    def _connect_dual(self):
+        if getattr(self, '_dual_wired', False):
+            return
+        try:
+            self.dual.txtChanged.connect(self._on_dual_txt_changed)
+            self.dual.exitRequested.connect(self._dual_single)
+        except Exception:
+            pass
+        self._dual_wired = True
+
+    def _on_dual_txt_changed(self, path):
+        self._text_path = path
+        self.statusBar().showMessage('已切换对读 TXT：%s' % os.path.basename(path))
+
+    def _dual_single(self, which):
+        """退出对读，只留 PDF 或只留 TXT（保持当前位置）。"""
+        try:
+            page = int(self.dual.current_page()) + 1
+        except Exception:
+            page = int(getattr(self, 'pgno', 0)) + 1
+        if which == 'pdf':
+            if getattr(self, 'pd', None) is None:
+                self.statusBar().showMessage('没有 PDF 可单独打开')
+                return
+            self.pgno = max(0, page - 1)
+            self._pdf_show()
+            self._say('已退出对读，只显示 PDF（第 %d 页）' % page, hold=2.5)
+            return
+        tp = getattr(self, '_text_path', '')
+        self._reader = 'text'
+        if tp and os.path.isfile(tp):
+            self._suppress_dual = True
+            try:
+                self._show_text_file(tp)
+            finally:
+                self._suppress_dual = False
+            self._say('已退出对读，只显示 TXT', hold=2.5)
+        else:
+            self.stack.setCurrentWidget(self.text_view)
+            self._say('已退出对读', hold=2.5)
 
     def _enter_dual(self, txt_path, pdf_path=None):
         try:
@@ -3918,13 +4544,25 @@ class MainWindow(QMainWindow):
             d = fitz.open(pdf_path)
             if int(d.page_count) <= 0:
                 return False
+            # batch14：进入对读时 PDF 停在第几页——若当前读的就是这本 PDF，就保持在原页
+            first = 1
+            same = (getattr(self, 'pd', None) is not None
+                    and getattr(self, '_pd_path', '') == pdf_path)
+            if same:
+                try:
+                    first = int(getattr(self, 'pgno', 0)) + 1
+                except Exception:
+                    first = 1
+            first = max(1, min(int(d.page_count), first))
+            self._connect_dual()
             self.pd = d
             self._pd_path = pdf_path
-            self.pgno = 0
+            self.pgno = first - 1
             fit = getattr(self, '_zoom_mode', 'fitp')
             if fit not in ('fitw', 'fitp', '100'):
                 fit = 'fitp'
-            self.dual.load(d, txt_path, first=1, fit=fit)
+            self.dual.load(d, txt_path, first=first, fit=fit)
+            self.dual.set_txt_list(self._dual_txt_variants(txt_path, pdf_path))
             self._text_path = txt_path
             self._reader = 'dual'
             self.stack.setCurrentWidget(self.dual)
@@ -3932,7 +4570,8 @@ class MainWindow(QMainWindow):
             self._sync_page_box()
             self._upd_status_pdf()
             self._stat_open(txt_path)
-            self._say('已进入 PDF + TXT 对读（同名 PDF），页码同步', hold=3.0)
+            self._say('已进入 PDF + TXT 对读（左右并列），PDF 停在第 %d 页、TXT 已同步' % first,
+                      hold=3.0)
             return True
         except Exception as e:
             self.statusBar().showMessage('对读打开失败：%s' % e)
@@ -4004,8 +4643,8 @@ class MainWindow(QMainWindow):
             _sz = os.path.getsize(p)
         except OSError:
             _sz = 0
-        _capped = _sz > TEXT_MAX_BYTES
-        txt = self._read_text_file(p, TEXT_MAX_BYTES if _capped else 0)
+        _capped = _sz > TEXT_DISPLAY_MAX
+        txt = self._read_text_file(p, TEXT_DISPLAY_MAX if _capped else 0)
         self._pdf_stop()
         self._hide_nav()
         self.stack.setCurrentWidget(self.text_view)
@@ -4026,8 +4665,8 @@ class MainWindow(QMainWindow):
         self._apply_line_height()
         self._stat_open(p)
         if _capped:
-            self._say('文件很大（%.0f MB）：只载入前 %d MB（不静默丢弃）'
-                      % (_sz / 1048576.0, TEXT_MAX_BYTES // 1048576))
+            self._say('文件很大（%.0f MB）：为不卡界面，只载入前 %d MB（不静默丢弃）'
+                      % (_sz / 1048576.0, TEXT_DISPLAY_MAX // 1048576))
         return True
 
     def md_toggle(self):

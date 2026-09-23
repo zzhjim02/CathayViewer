@@ -164,6 +164,111 @@ def add_excerpt(meta, text, page, src_path, ts=None):
             'chars': len(text), 'info': info}
 
 
+# ----------------------------------------------------------------- 摘录本：读取 / 编辑
+_EXC_HEAD = '# 摘录本\n\n> 本文件由 CathayViewer 自动维护（每条摘录附带出处）。\n'
+_EXC_SPLIT = re.compile(r'(?m)^###\s*摘录\s*·\s*')
+
+
+def parse_excerpts(text=None, path=None):
+    """把「摘录本.md」解析成记录列表 [{ts, body, cite}]，供查看/编辑。"""
+    if text is None:
+        text = _read_text(path or excerpt_target())
+    text = text or ''
+    recs = []
+    for blk in _EXC_SPLIT.split(text)[1:]:
+        lines = blk.split('\n')
+        ts = (lines[0] or '').strip()
+        body, cite, sep = [], [], False
+        for ln in lines[1:]:
+            if not sep:
+                if ln.strip() == '>':
+                    sep = True
+                    continue
+                if ln.startswith('> '):
+                    body.append(ln[2:])
+                elif ln.startswith('>'):
+                    body.append(ln[1:])
+                elif ln.strip() == '':
+                    continue
+                else:
+                    body.append(ln)
+            else:
+                if ln.startswith('> '):
+                    cite.append(ln[2:])
+                elif ln.startswith('>'):
+                    cite.append(ln[1:])
+                elif ln.strip() == '':
+                    continue
+                else:
+                    cite.append(ln)
+        while body and not body[-1].strip():
+            body.pop()
+        while cite and not cite[-1].strip():
+            cite.pop()
+        if not body and not cite:
+            continue
+        recs.append({'ts': ts, 'body': '\n'.join(body).strip('\n'),
+                     'cite': '\n'.join(cite).strip('\n')})
+    return recs
+
+
+def build_excerpts(records):
+    """把记录列表写回「摘录本.md」文本（与 add_excerpt 同一格式）。"""
+    buf = [_EXC_HEAD]
+    for r in (records or []):
+        ts = (r.get('ts') or '').strip()
+        body = (r.get('body') or '').rstrip('\n')
+        cite = (r.get('cite') or '').rstrip('\n')
+        if not (body or cite):
+            continue
+        quoted = '\n'.join('> ' + ln if ln.strip() else '>' for ln in body.splitlines())
+        clines = '\n'.join('> ' + ln if ln.strip() else '>' for ln in cite.splitlines())
+        buf.append('\n### 摘录 · %s\n%s\n>\n%s\n' % (ts, quoted, clines))
+    return ''.join(buf)
+
+
+def read_excerpts():
+    """读取「摘录本」（返回记录列表）。"""
+    return parse_excerpts(path=excerpt_target())
+
+
+def write_excerpts(records):
+    """整体重写「摘录本」（先写临时文件再原子替换）。返回写入路径。"""
+    p = excerpt_target()
+    tmp = p + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        f.write(build_excerpts(records))
+    os.replace(tmp, p)
+    return p
+
+
+def excerpt_target_path():
+    return excerpt_target()
+
+
+# ----------------------------------------------------------------- 截图本：清单
+_IMG_EXT = ('.png', '.jpg', '.jpeg', '.bmp', '.webp')
+
+
+def list_snapshots():
+    """列出截图本目录里的图片（新在前）：[{name, path, mtime}]。"""
+    d = record_dir(_SNAPSHOT_DIR)
+    out = []
+    try:
+        for fn in os.listdir(d):
+            if fn.lower().endswith(_IMG_EXT):
+                p = os.path.join(d, fn)
+                try:
+                    mt = os.path.getmtime(p)
+                except OSError:
+                    mt = 0
+                out.append({'name': fn, 'path': p, 'mtime': mt})
+    except OSError:
+        pass
+    out.sort(key=lambda x: x['mtime'], reverse=True)
+    return out
+
+
 # ----------------------------------------------------------------- 截图本
 def snapshot_target():
     return record_dir(_SNAPSHOT_DIR)
@@ -582,6 +687,25 @@ def selftest():
            '脚注 RTF 含 \\footnote 与 Unicode 转义')
         ok('<sup>' in footnote_html('正文', '出处') and '出处' in footnote_html('正文', '出处'),
            '脚注 HTML 回退')
+        # 摘录本解析 / 回写（查看器 / 编辑器）
+        recs = parse_excerpts(path=r1['path'])
+        ok(len(recs) == 2 and '人的觉醒' in recs[0]['body']
+           and '美的历程' in recs[0]['cite'],
+           '解析摘录本 → %d 条，正文/出处正确' % len(recs))
+        recs[0]['body'] = '（改过的）人的觉醒是魏晋时期的一大特征。'
+        recs.append({'ts': '2026-01-01 00:00:00', 'body': '手工新增一条。',
+                     'cite': '《测试书》第1页'})
+        p2 = write_excerpts(recs)
+        recs2 = parse_excerpts(path=p2)
+        ok(len(recs2) == 3 and '（改过的）' in recs2[0]['body']
+           and '手工新增' in recs2[2]['body'],
+           '编辑后回写 → %d 条，改动与新增都在' % len(recs2))
+        ok(build_excerpts(parse_excerpts(path=p2)).count('### 摘录') == 3,
+           '回写→再解析仍为 3 条（格式自洽）')
+        # 截图本清单
+        snaps = list_snapshots()
+        ok(any(s['name'] == r2['name'] for s in snaps),
+           '截图本清单含刚存的图（%d 张）' % len(snaps))
     finally:
         _DOCS_ROOT = old
         shutil.rmtree(base, ignore_errors=True)

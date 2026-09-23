@@ -25,7 +25,17 @@
 ⌛纪年换算工具 / ✂摘录自动含纪年换算）。
 + batch13 新增 3 项（103-105：👤人名别名归一（检索人名并入字號/笔名，ask/auto/off）/ 人名
 别名表对话框 / 别名归一逻辑 expand·lookup 反查）。
-最后输出 SUMMARY ok=N fail=M（当前 **105/105**）。
++ batch14 新增 9 项（106-114：⇄对读左右并列+中间 PDF 导航 / 对读可切 TXT 版本 /
+对读可退出只看 PDF·只看 TXT / 进对读保持 PDF 页并同步 TXT / 左栏可缩很小 +
+「版本」下拉变宽 / 🗂摘录查看・编辑器 / ⌛越界纪年（康熙63年）→公元年+提示实际纪年 /
+⌛反查每个年号注明年数 / ⌛反查含民国纪年）。
++ batch15 新增 3 项（115-117：拖入 PDF/TXT → 在阅读区打开 / 拖入多个只开首个 + 提示 /
+  双击关联：关联·取消关联脚本含 PDF/TXT 并设为默认）。
++ batch16 新增 3 项（118-120：大 PDF 著录不卡（浅著录秒回 + 后台补深 + 缓存）/
+  超大 TXT 只载入前 8 MB + 提示 / 超大 TXT 对读截断且不自动进对读）。
++ batch16 新增 3 项（118-120：大 PDF 著录不卡（浅著录秒回 + 后台补深 + 缓存）/ 超大 TXT 只载前 8MB
+  + 提示 / 超大 TXT 对读只载前 8MB且不自动进对读）。
+最后输出 SUMMARY ok=N fail=M（当前 **120/120**）。
 
 只读不动源库；临时目录跑完即删。写死到 CathayViewer-DEV\\开发\\功能自检_日志.txt。
 """
@@ -2250,6 +2260,298 @@ def main():
                 % (ok1, ok2, ALIAS.count()['people']))
 
     step(105, '👤 别名归一逻辑（expand / lookup 反查）', alias_logic)
+
+    # ---------------- batch14 新增功能核验（106-114） ----------------
+    # ① 对读左右并列 + 中间导航 ② TXT 版本可切 ③ 只看 PDF/TXT
+    # ④ 进对读保持 PDF 页并同步 TXT ⑤ 左栏可缩小 ⑥ 版本下拉变宽
+    # ⑦ 摘录查看/编辑器 ⑧ 越界纪年提示 ⑨ 反查注明年数
+    def dual_layout():
+        from PyQt6.QtWidgets import QSplitter
+        if getattr(w, '_reader', '') != 'dual':
+            w.st['auto_dual'] = True
+            pick('对读测试.txt')
+            w.preview_here()
+            app.processEvents()
+            w.st['auto_dual'] = False
+        if getattr(w, '_reader', '') != 'dual':
+            return (False, 'reader=%s' % w._reader)
+        horiz = nav = False
+        for s in w.dual.findChildren(QSplitter):
+            if s.count() == 3 and s.widget(0) is w.dual.pdf and s.widget(2) is w.dual.txt:
+                horiz = (s.orientation() == Qt.Orientation.Horizontal)
+                mid = s.widget(1)
+                nav = (mid is not None and mid is not w.dual.pdf and mid is not w.dual.txt
+                       and w.dual.ed in mid.findChildren(type(w.dual.ed)))
+        return (horiz and nav, 'horiz=%s 中间导航=%s' % (horiz, nav))
+
+    step(106, '⇄ 对读：PDF/TXT 左右并列，中间是 PDF 导航', dual_layout)
+
+    def dual_txt_version():
+        v = os.path.join(src, '对读测试_【繁转简】.txt')
+        open(v, 'w', encoding='utf-8').write(
+            '======\n第 1 页\nTXT变体甲。\n======\n第 2 页\nTXT变体乙。\n'
+            '======\n第 3 页\nTXT变体丙。\n======\n')
+        try:
+            C.refresh(db, [src])
+        except Exception:
+            pass
+        p = pick('对读测试.txt')
+        if not p:
+            return (False, '未选中 对读测试.txt')
+        w.st['auto_dual'] = True
+        w.preview_here()
+        app.processEvents()
+        w.st['auto_dual'] = False
+        if w._reader != 'dual':
+            return (False, 'reader=%s' % w._reader)
+        n = w.dual.cb_txt.count()
+        target = -1
+        for i in range(n):
+            if '繁转简' in (w.dual.cb_txt.itemText(i) or ''):
+                target = i
+        if target < 0:
+            return (False, '下拉项=%s' % [w.dual.cb_txt.itemText(i) for i in range(n)])
+        w.dual.cb_txt.setCurrentIndex(target)
+        app.processEvents()
+        txt = w.dual.txt.toPlainText()
+        ok = (n >= 2 and '变体' in txt)
+        return (ok, 'n=%d 变体=%s path=%s'
+                % (n, '变体' in txt, os.path.basename(getattr(w, '_text_path', ''))))
+
+    step(107, '⇄ 对读可切换 TXT 版本（OCR/繁简）', dual_txt_version)
+
+    def dual_single_view():
+        if getattr(w, '_reader', '') != 'dual':
+            w.st['auto_dual'] = True
+            pick('对读测试.txt')
+            w.preview_here()
+            app.processEvents()
+            w.st['auto_dual'] = False
+        if getattr(w, '_reader', '') != 'dual':
+            return (False, 'reader=%s' % w._reader)
+        w.dual.goto_page(1)
+        app.processEvents()
+        w.dual._single('pdf')
+        app.processEvents()
+        ok1 = (w._reader == 'pdf' and w.stack.currentWidget() is w.pdf_view)
+        pg = w.pgno
+        w._enter_dual(getattr(w, '_text_path', ''))
+        app.processEvents()
+        w.dual._single('text')
+        app.processEvents()
+        ok2 = (w._reader == 'text' and w.stack.currentWidget() is w.text_view)
+        return (ok1 and ok2, '只看PDF=%s pg=%s 只看TXT=%s' % (ok1, pg, ok2))
+
+    step(108, '⇄ 对读可退出：只看 PDF / 只看 TXT', dual_single_view)
+
+    def dual_keep_page():
+        p = pick('对读测试.pdf')
+        if not p:
+            return (False, '未选中 对读测试.pdf')
+        w.preview_here()
+        app.processEvents()
+        if w._reader != 'pdf':
+            return (False, 'reader=%s' % w._reader)
+        w.pgno = 2
+        w._pdf_show()
+        app.processEvents()
+        w.toggle_dual()
+        app.processEvents()
+        ok = (w._reader == 'dual' and w.dual.ed.text() == '3' and w.pgno == 2)
+        return (ok, 'reader=%s 页码框=%s pgno=%s' % (w._reader, w.dual.ed.text(), w.pgno))
+
+    step(109, '⇄ 进对读：PDF 停原页，TXT 同步到该页', dual_keep_page)
+
+    def left_width():
+        return (w.tb.minimumWidth() <= 100 and w.cb_ver.maximumWidth() >= 300,
+                'tb.min=%s cb_ver.max=%s' % (w.tb.minimumWidth(), w.cb_ver.maximumWidth()))
+
+    step(110, '左栏可缩很小 + 「版本」下拉显示变宽', left_width)
+
+    def excerpt_viewer_open():
+        for d in (200, 600, 1200, 2000):
+            QTimer.singleShot(d, close_modal)
+        w.excerpt_viewer()
+        app.processEvents()
+        d = getattr(w, '_last_excerpt_dlg', None) or {}
+        lst = d.get('list')
+        n = lst.count() if lst is not None else 0
+        recs = (d.get('recs') or {}).get('recs') or []
+        ok = bool(lst) and n >= 1 and len(recs) >= 1
+        return (ok, 'list=%d recs=%d' % (n, len(recs)))
+
+    step(111, '🗂 摘录查看器 / 编辑器（可列出并编辑）', excerpt_viewer_open)
+
+    def chrono_overflow():
+        import viewer_chrono as CHRONO
+        a, _ = CHRONO.annotate('康熙六十三年')
+        ok1 = ('1724' in a and '存疑' in a and ('雍正' in a))
+        b, _ = CHRONO.annotate('光绪三十五年')
+        ok2 = ('1909' in b and '存疑' in b and '宣统' in b)
+        return (ok1 and ok2, '康熙63=%s | 光緖35=%s' % (a[:26], b[:26]))
+
+    step(112, '⌛ 越界纪年（康熙63年）→公历年 + 提示实际纪年', chrono_overflow)
+
+    def chrono_reverse():
+        import viewer_chrono as CHRONO
+        fe = CHRONO.format_eras(1898)
+        ok1 = ('光绪二十四年' in fe and '明治三十一年' in fe and '同治' not in fe)
+        ok2 = (CHRONO.era_year_cn(24) == '二十四' and CHRONO.era_year_cn(1) == '元')
+        return (ok1 and ok2, '1898 => %s' % fe)
+
+    step(113, '⌛ 反查：每个年号都注明是第几年', chrono_reverse)
+
+    def dual_txt_and_layout_final():
+        import viewer_chrono as CHRONO
+        ok1 = CHRONO.format_eras(1937).count('年号') == 0 and '民国' in CHRONO.format_eras(1937)
+        return (ok1, '1937 => %s' % CHRONO.format_eras(1937))
+
+    step(114, '⌛ 反查含民国纪年且注明年数', dual_txt_and_layout_final)
+
+    # ---------------- batch15 新增功能核验（115-117）拖入打开 / 双击关联 ----------------
+    class _FakeMime(object):
+        def __init__(self, paths):
+            from PyQt6.QtCore import QMimeData, QUrl
+            self._m = QMimeData()
+            self._m.setUrls([QUrl.fromLocalFile(p) for p in paths])
+
+        def hasUrls(self):
+            return self._m.hasUrls()
+
+        def urls(self):
+            return self._m.urls()
+
+    class _FakeDrop(object):
+        def __init__(self, paths):
+            self._mime = _FakeMime(paths)
+            self.accepted = 0
+
+        def mimeData(self):
+            return self._mime
+
+        def acceptProposedAction(self):
+            self.accepted += 1
+
+        def ignore(self):
+            pass
+
+    def drop_open():
+        assert w.acceptDrops(), 'MainWindow 未开启拖放'
+        pe = _FakeDrop([_dual])
+        w.dragEnterEvent(pe)
+        w.dropEvent(pe)
+        app.processEvents()
+        ok1 = (w._reader == 'pdf' and w.stack.currentWidget() is w.pdf_view)
+        te = _FakeDrop([_dualtxt])
+        w.dropEvent(te)
+        app.processEvents()
+        ok2 = (w._reader in ('text', 'dual'))
+        ok3 = (pe.accepted >= 1)
+        return (ok1 and ok2 and ok3,
+                'acceptDrops=%s pdf=%s txt=%s ev=%s'
+                % (w.acceptDrops(), ok1, w._reader, pe.accepted))
+
+    step(115, '拖入 PDF / TXT → 在阅读区打开', drop_open)
+
+    def drop_multi():
+        fe = _FakeDrop([_dualtxt, _dual])
+        w.dropEvent(fe)
+        app.processEvents()
+        msg = w.statusBar().currentMessage() or ''
+        ok = (getattr(w, '_reader', '') in ('text', 'dual') and '另有 1' in msg)
+        return (ok, 'reader=%s msg=%r' % (getattr(w, '_reader', ''), msg[:40]))
+
+    step(116, '拖入多个 → 只开首个 + 提示其余忽略', drop_multi)
+
+    def assoc_scripts():
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        a = os.path.join(root, '关联.bat')
+        b = os.path.join(root, '取消关联.bat')
+        ta = open(a, 'rb').read()
+        tb = open(b, 'rb').read()
+        ascii_ok = all(x < 128 for x in ta) and all(x < 128 for x in tb)
+        crlf_ok = (ta.count(b'\n') - ta.count(b'\r\n') == 0
+                   and tb.count(b'\n') - tb.count(b'\r\n') == 0)
+        has_pdf = (b'CathayViewer.pdf' in ta) and (b'.pdf' in ta) and (b'.txt' in ta)
+        default_add = (b'Classes\\.pdf" /ve /d "CathayViewer.pdf"' in ta)
+        default_del = (b'Classes\\.pdf" /ve /f' in tb)
+        ok = (ascii_ok and crlf_ok and has_pdf and default_add and default_del)
+        return (ok, 'ascii=%s crlf=%s pdf/txt=%s 默认=%s/%s'
+                % (ascii_ok, crlf_ok, has_pdf, default_add, default_del))
+
+    step(117, '双击关联：关联/取消关联脚本（PDF/TXT，含设为默认）', assoc_scripts)
+
+    # ---------------- batch16 新增功能核验（118-120）卡顿修复 ----------------
+    def meta_async():
+        p = pick('对读测试.pdf')
+        if not p:
+            return (False, '未选中 对读测试.pdf')
+        w._meta_map = {}              # 清缓存，确保走一次新流程
+        t0 = time.time()
+        w.on_pick()
+        dt = time.time() - t0
+        fast = (dt < 1.0)
+        deep_now = bool((w.meta or {}).get('_deep'))   # 允许竞态：先浅后深
+        got = deep_now
+        tk = time.time()
+        while time.time() - tk < 5.0 and not got:
+            app.processEvents()
+            time.sleep(0.02)
+            got = bool((w.meta or {}).get('_deep'))
+        # 缓存：再来一次应立即拿到深著录
+        t1 = time.time()
+        w.on_pick()
+        dt2 = time.time() - t1
+        cached_deep = bool((w.meta or {}).get('_deep'))
+        return (fast and got and cached_deep and dt2 < 1.0,
+                '首次=%.3fs 深著录=%s(%.1fs) 缓存=%s(%.3fs)'
+                % (dt, got, time.time() - tk, cached_deep, dt2))
+
+    step(118, '大 PDF 著录不卡：浅著录秒回 + 后台补深 + 缓存', meta_async)
+
+    _bigtxt = os.path.join(src, '大文件测试.txt')
+    with open(_bigtxt, 'w', encoding='utf-8') as _f:
+        _blk = '这是一段用于测试超大文件截断的正文。' * 40 + '\n'
+        _nb = 0
+        while _nb < 9 * 1024 * 1024:
+            _f.write(_blk)
+            _nb += len(_blk.encode('utf-8'))
+    _d = fitz.open()
+    ins(_d.new_page(), (72, 100), '大文件测试', 14)
+    _d.save(os.path.join(src, '大文件测试.pdf'))
+    _d.close()
+    try:
+        C.refresh(db, [src])
+    except Exception:
+        pass
+
+    def big_text_cap():
+        size = os.path.getsize(_bigtxt)
+        w._show_text_file(_bigtxt)
+        app.processEvents()
+        n = len(w.view.toPlainText())
+        msg = w.statusBar().currentMessage() or ''
+        ok = (size > G.TEXT_DISPLAY_MAX and n <= G.TEXT_DISPLAY_MAX + 4096
+              and ('只载入前' in msg or '卡界面' in msg))
+        return (ok, 'MB=%.1f 载入字符=%d msg=%r' % (size / 1048576.0, n, msg[:30]))
+
+    step(119, '超大 TXT 只载入前 8 MB（不卡界面）+ 提示', big_text_cap)
+
+    def dual_big_skip():
+        st = getattr(w.dual.txt, 'truncated', None)
+        v = G.TxtSyncView()
+        v.load(_bigtxt)
+        trunc = bool(getattr(v, 'truncated', False))
+        n = len(v.toPlainText())
+        w.st['auto_dual'] = True
+        r = w._maybe_auto_dual(_bigtxt)
+        msg = w.statusBar().currentMessage() or ''
+        w.st['auto_dual'] = False
+        ok = (trunc and n <= G.DUAL_TXT_MAX + 4096 and (r is False)
+              and ('未自动进入对读' in msg))
+        return (ok, 'trunc=%s 字符=%d auto=%s msg=%r' % (trunc, n, r, msg[:26]))
+
+    step(120, '超大 TXT：对读只载入前 8 MB，不自动进对读', dual_big_skip)
     try:
         w.close()
     except Exception:

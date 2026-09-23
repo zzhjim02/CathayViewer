@@ -583,7 +583,10 @@ def _sibling_pdfs(path):
 
 
 def _pdf_text(path, first=16, last=16):
-    """只读 PDF 自带文字层（不做 OCR）；前 16 + 后 16 页，无版权页特征则全文。"""
+    """只读 PDF 自带文字层（不做 OCR）；前 16 + 后 16 页，无版权页特征才扩大采样。
+
+    batch16：大书（> FULL_SCAN_MAX 页）**不再全文扫描**（scanning a 1.8 GB PDF 全文要 8–10s，会卡界面）。
+    """
     try:
         import fitz
     except Exception:
@@ -597,7 +600,12 @@ def _pdf_text(path, first=16, last=16):
         idx = sorted(set(list(range(min(first, n))) + list(range(max(0, n - last), n))))
         txt = '\n'.join(doc[i].get_text() for i in idx)
         if not any(k in txt for k in ('ISBN', '出版', '定价', '印刷')):
-            txt = '\n'.join(doc[i].get_text() for i in range(n))
+            if n <= _FULL_SCAN_MAX:
+                txt = '\n'.join(doc[i].get_text() for i in range(n))
+            else:
+                # 大书：扩大前后采样（不全文），已经足够找版权/CIP
+                idx2 = sorted(set(range(min(60, n)) + range(max(0, n - 30), n)))
+                txt = '\n'.join(doc[i].get_text() for i in idx2)
         return txt
     except Exception:
         return ''
