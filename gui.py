@@ -1030,11 +1030,22 @@ class PdfView(QScrollArea):
 
 
 class ReaderWindow(QMainWindow):
-    """阅读器独立窗口：关闭时自动收回主窗口。"""
+    """阅读器独立窗口：关闭时自动收回主窗口。
+
+    batch18：**不设父窗口**（独立顶层窗口）——这样最小化主窗口（文件列表）时，
+    阅读器窗口不会被连带最小化。
+    """
     def __init__(self, owner):
-        super().__init__(owner)
+        super().__init__(None)
         self.owner = owner
         self.setWindowTitle('CathayViewer 阅读器')
+        try:
+            self.setWindowFlag(Qt.WindowType.Window, True)
+            self.setWindowFlag(Qt.WindowType.WindowMinimizeButtonHint, True)
+            self.setWindowFlag(Qt.WindowType.WindowMaximizeButtonHint, True)
+            self.setWindowFlag(Qt.WindowType.WindowCloseButtonHint, True)
+        except Exception:
+            pass
         try:
             if icon_path():
                 self.setWindowIcon(QIcon(icon_path()))
@@ -1043,10 +1054,14 @@ class ReaderWindow(QMainWindow):
 
     def closeEvent(self, ev):
         try:
-            self.owner._attach_reader(from_close=True)
+            if not getattr(self, '_cv_no_attach', False):
+                self.owner._attach_reader(from_close=True)
         except Exception:
             pass
-        super().closeEvent(ev)
+        try:
+            super().closeEvent(ev)
+        except Exception:
+            pass
 
 
 class TxtSyncView(QTextEdit):
@@ -1620,6 +1635,8 @@ class MainWindow(QMainWindow):
         self._ftshistk.activated.connect(self.fts_history_dialog)
         self._footk = QShortcut(QKeySequence('Ctrl+Shift+I'), self)
         self._footk.activated.connect(self.footnote_here)
+        self._listk = QShortcut(QKeySequence('Ctrl+Shift+L'), self)      # batch17：收起/展开左栏
+        self._listk.activated.connect(self.toggle_list)
         self._chronok = QShortcut(QKeySequence('Ctrl+Shift+Y'), self)
         self._chronok.activated.connect(self.chrono_dialog)
         self._aliask = QShortcut(QKeySequence('Ctrl+Shift+A'), self)
@@ -1724,14 +1741,16 @@ class MainWindow(QMainWindow):
         _hh = self.tb.horizontalHeader()
         _hh.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
         _hh.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        _hh.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # batch10：不再固定200
+        _hh.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)   # batch17：可缩（不再被内容撑宽）
+        _hh.resizeSection(2, 150)
+        _hh.setMinimumSectionSize(24)
         self.tb.setWordWrap(False)
         self.tb.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.tb.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tb.itemSelectionChanged.connect(self.on_pick)
         self.tb.itemDoubleClicked.connect(self._on_item_dbl)
         self.tb.itemClicked.connect(self._on_item_click)      # 单击文件名即打开
-        self.tb.setMinimumWidth(90)           # batch14：用户可把左栏拖得很窄
+        self.tb.setMinimumWidth(48)           # batch17：可以拖得非常窄（原先 90 仍嫌占位）
         self.tb.setMaximumWidth(880)          # 上限（resizeEvent 里再按窗口比例收紧）
         # 命中关键词在文件名列黄底高亮
         self._last_kw = ''
@@ -1758,14 +1777,37 @@ class MainWindow(QMainWindow):
         self.b_exc = QPushButton('🗂 摘录本')
         self.b_exc.setToolTip('查看 / 编辑已摘录的资料（Ctrl+Shift+M）')
         self.b_exc.clicked.connect(self.excerpt_viewer)
+        # batch17：左栏变窄时，上面 4 个按钮收进「⋮」菜单，让文件列表能缩到極小
+        from PyQt6.QtWidgets import QToolButton
+        self.b_more = QToolButton()
+        self.b_more.setText('⋮')
+        self.b_more.setToolTip('更多：跨文件全文检索 / 检索历史 / 人名别名 / 摘录本')
+        try:
+            self.b_more.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        except Exception:
+            pass
+        _mmenu = QMenu(self.b_more)
+        _mmenu.addAction('🔎 跨文件全文检索', self.fulltext_search)
+        _mmenu.addAction('🕘 检索历史', self.fts_history_dialog)
+        _mmenu.addAction('👤 人名别名', self.alias_dialog)
+        _mmenu.addAction('🗂 摘录本', self.excerpt_viewer)
+        self.b_more.setMenu(_mmenu)
         lh.addWidget(self.b_fts)
         lh.addWidget(self.b_fts_hist)
         lh.addWidget(self.b_alias)
         lh.addWidget(self.b_exc)
+        lh.addWidget(self.b_more)
+        self.b_more.setVisible(False)
         lh.addStretch(1)
+        # batch17：这排按钮不把左栏「撑宽」（可被压缩；太窄时整排收进 ⋮）
+        from PyQt6.QtWidgets import QSizePolicy
+        for _b in (self.b_fts, self.b_fts_hist, self.b_alias, self.b_exc, self.b_more):
+            _b.setMinimumWidth(0)
+            _b.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
         lv.addLayout(lh)
         lv.addWidget(self.tb, 1)
         sp.addWidget(left)
+        self._left = left
         right = QWidget()
         right.setMinimumWidth(320)
         rv = QVBoxLayout(right)
@@ -1938,12 +1980,67 @@ class MainWindow(QMainWindow):
         self._split_sizes = None
         sp.addWidget(right)
         sp.setChildrenCollapsible(False)      # 两侧不可被折叠掉
+        sp.setCollapsible(0, True)            # batch17：左栏可完全收起（拖到 0 或 Ctrl+Shift+L）
+        sp.setCollapsible(1, False)
         sp.setStretchFactor(0, 0)             # 左：列表/详情，不抢空间
         sp.setStretchFactor(1, 1)             # 右：阅读区，占据窗口增量
         sp.setSizes([340, 1160])              # 阅读区默认占大头（窗口变窄时按比例缩放）
         self._split = sp
+        self._split.splitterMoved.connect(self._on_split_moved)   # batch17：拖分割条时自适应左栏按钮
         v.addWidget(sp, 1)
         self.statusBar().showMessage('就绪')
+        try:
+            self._fit_left_buttons(340)
+        except Exception:
+            pass
+
+    # ---- batch17：左栏宽度自适应／可缩到極小
+    def _on_split_moved(self, *_):
+        try:
+            self._fit_left_buttons(self._split.sizes()[0])
+        except Exception:
+            pass
+
+    def _fit_left_buttons(self, w):
+        """左栏窄 → 把 4 个动作按钮收进「⋮」菜单；再窄则收起「上级文件夹」列。"""
+        try:
+            btns = [x for x in (getattr(self, 'b_fts', None), getattr(self, 'b_fts_hist', None),
+                                getattr(self, 'b_alias', None), getattr(self, 'b_exc', None))
+                    if x is not None]
+            narrow = int(w) < 420
+            for b in btns:
+                b.setVisible(not narrow)
+            more = getattr(self, 'b_more', None)
+            if more is not None:
+                more.setVisible(narrow)
+            tb = getattr(self, 'tb', None)
+            if tb is not None:
+                tb.setColumnHidden(2, int(w) < 220)     # 太窄时收起「上级文件夹」列
+        except Exception:
+            pass
+
+    def toggle_list(self):
+        """收起/展开左侧文件列表（Ctrl+Shift+L）。"""
+        sp = getattr(self, '_split', None)
+        if sp is None:
+            return
+        try:
+            sz = sp.sizes()
+        except Exception:
+            return
+        if sz and sz[0] > 40:
+            self._list_prev = int(sz[0])
+            sp.setSizes([0, int(sz[1]) + int(sz[0])])
+            self.statusBar().showMessage('已收起文件列表（Ctrl+Shift+L 恢复）')
+        else:
+            w0 = int(getattr(self, '_list_prev', 360) or 360)
+            right_w = int(sz[1]) if len(sz) > 1 else 900
+            sp.setSizes([w0, max(200, right_w - w0)])
+            self.statusBar().showMessage('已展开文件列表')
+        try:
+            self._fit_left_buttons(sp.sizes()[0])
+        except Exception:
+            pass
 
     # ---- 窗口尺寸 / 分割比例
     def _apply_default_size(self):
@@ -1979,6 +2076,7 @@ class MainWindow(QMainWindow):
                 else:
                     tb.setMaximumWidth(max(tb.minimumWidth(),
                                            min(880, int(self.width() * 0.46))))
+            self._fit_left_buttons(self._split.sizes()[0])   # batch17：窗口变化时左栏按钮自适应
         except Exception:
             pass
 
@@ -2125,6 +2223,37 @@ class MainWindow(QMainWindow):
                     self.rows[self.rows.index(hit)] = r
                     seen[key] = r
         self._last_kw = kw            # 供文件名列黄底高亮
+        self._fill_rows(rows)
+        _msg = '搜到 %d 本（原始命中 %d 条，同书各版本已串在一起）' % (len(self.rows), len(rows))
+        if len(kws) > 1:
+            _msg += '；已并入别名：%s' % '、'.join(extras[:10])
+        self.statusBar().showMessage(_msg)
+
+    def _fill_rows(self, rows, dedup=True):
+        """填充左栏表格。dedup=True 时把「同书同版本」串一条（PDF 原本优先）；
+        dedup=False（直接打开文件时的邻居列表）则**每个文件都保留**。"""
+        seen = {}
+        self.rows = []
+        for r in rows:
+            if not dedup:
+                self.rows.append(r)
+                continue
+            try:
+                q = META.parse(r.get('name') or '',
+                               os.path.join(r.get('dir') or '', r.get('name') or ''),
+                               deep=False)   # 列表只按文件名分组，不读版权页（快）
+                key = (r.get('dir') or '', q.get('name') or r.get('name'), q.get('volume') or '')
+            except Exception:
+                key = (r.get('dir') or '', r.get('name') or '', '')
+            hit = seen.get(key)
+            if hit is None:
+                seen[key] = r
+                self.rows.append(r)
+            else:
+                hn, rn = (hit.get('name') or '').lower(), (r.get('name') or '').lower()
+                if rn.endswith('.pdf') and not hn.endswith('.pdf'):   # PDF 原本优先
+                    self.rows[self.rows.index(hit)] = r
+                    seen[key] = r
         self.tb.setRowCount(0)
         for r in self.rows:
             k = self.tb.rowCount()
@@ -2145,10 +2274,102 @@ class MainWindow(QMainWindow):
             self.tb.viewport().update()
         except Exception:
             pass
-        _msg = '搜到 %d 本（原始命中 %d 条，同书各版本已串在一起）' % (len(self.rows), len(rows))
-        if len(kws) > 1:
-            _msg += '；已并入别名：%s' % '、'.join(extras[:10])
-        self.statusBar().showMessage(_msg)
+        return len(self.rows)
+
+    # ---- batch18：直接打开某文件 → 左栏列出「同文件夹 + 文件名相似」的文件
+    def _similar_key(self, name):
+        """相似文件名的检索键：书名主干，再去掉「续编 / 补遗 / 外编」这类尾缀。"""
+        try:
+            s = META.book_core(name or '')
+        except Exception:
+            s = name or ''
+        s2 = re.sub(r'(续编|续集|续录|补遗|补编|外编|附编|新编|前编|后编|别编|二编|三编|再编)$', '', s)
+        s2 = s2.strip(' _-—+·、.')
+        return s2 or s
+
+    def _list_neighbors(self, p, limit_same=300, limit_like=300):
+        """把 p 所在文件夹的文件 + 与 p 书名主干相似的文件填到左栏（并尽量选中 p）。"""
+        p = os.path.abspath(p)
+        d = os.path.dirname(p)
+        base = os.path.basename(p)
+        _stem = os.path.splitext(base)[0]
+        try:
+            self.ed_kw.setText(_stem)
+        except Exception:
+            pass
+        self._last_kw = ''
+        self._hl_kws = []
+        rows, seen = [], set()
+
+        def _add(rs):
+            for r in rs:
+                try:
+                    k = (os.path.normcase(r.get('dir') or ''),
+                         (r.get('name') or '').lower())
+                except Exception:
+                    continue
+                if k in seen:
+                    continue
+                seen.add(k)
+                rows.append(r)
+
+        n_same = 0
+        # ① 同文件夹（先查索引库，再把磁盘上没进库的也补上）
+        try:
+            same = C.by_dir(self.db, d, limit_same) if self.db else []
+        except Exception:
+            same = []
+        n_same = len(same)
+        _add(same)
+        try:
+            for e in os.scandir(d):
+                if not e.is_file():
+                    continue
+                if os.path.splitext(e.name)[1].lower() not in C.EXTS:
+                    continue
+                try:
+                    stt = e.stat()
+                except OSError:
+                    continue
+                _add([{'dir': d, 'name': e.name, 'size': stt.st_size,
+                       'mtime': stt.st_mtime}])
+        except OSError:
+            pass
+        # ② 书名主干相似（不限文件夹）：主干 + 去掉「续编/补遗」等尾缀的更宽键
+        try:
+            core = META.book_core(base) or _stem
+        except Exception:
+            core = _stem
+        try:
+            core2 = self._similar_key(base)
+        except Exception:
+            core2 = core
+        keys = []
+        for k in (core, core2):
+            if k and k not in keys:
+                keys.append(k)
+        n_like = 0
+        for k in keys:
+            try:
+                like = C.like_stem(self.db, k, limit_like) if self.db else []
+                n_like += len(like)
+                _add(like)
+            except Exception:
+                pass
+        n = self._fill_rows(rows, dedup=False)          # 邻居列表：每个文件都列出来
+        # 选中打开的那一个
+        want = os.path.normcase(p)
+        for i, r in enumerate(self.rows):
+            if os.path.normcase(os.path.abspath(
+                    os.path.join(r.get('dir') or '', r.get('name') or ''))) == want:
+                try:
+                    self.tb.setCurrentCell(i, 0)
+                except Exception:
+                    pass
+                break
+        self.statusBar().showMessage(
+            '左侧：同文件夹 %d 个 ｜ 相似文件名 %d 个（共 %d 个）' % (n_same, n_like, n))
+        return n
 
     def _meta_brief(self, name, path):
         """著录列文本：作者 · 出版社 · 年 · SSID（只解析文件名，deep=False，快）。"""
@@ -2546,7 +2767,7 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def closeEvent(self, ev):
-        """关窗：停后台深著录线程 + 结算最后一次阅读时长（写 settings，异常静默）+ 记住窗口布局。"""
+        """关窗：停后台深著录线程 + 结算阅读时长 + 记住布局 + 一并关掉独立阅读窗口。"""
         try:
             self._stop_meta_worker()
         except Exception:
@@ -2556,6 +2777,16 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
         self._save_layout()
+        # batch18：阅读器是独立顶层窗口，主窗口退出时把它一并关掉（否则程序不会退出）
+        try:
+            win = getattr(self, '_reader_win', None)
+            if win is not None:
+                self._closing = True
+                win._cv_no_attach = True
+                win.close()
+                self._reader_win = None
+        except Exception:
+            pass
         try:
             super().closeEvent(ev)
         except Exception:
@@ -2836,10 +3067,13 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage('目录：%d 项（Ctrl+T 显示/隐藏）' % n)
 
     def open_path_in_reader(self, p, note=''):
-        """把某个文件在阅读区内部打开，并尽量在列表里选中它（拖入 / 命令行共用）。"""
+        """把某个文件在阅读区内部打开；左栏自动列出同文件夹 + 文件名相似的文件（batch18）。"""
         try:
-            self.ed_kw.setText(os.path.splitext(os.path.basename(p))[0])
-            self.do_search()
+            if self.db and os.path.isfile(self.db):
+                self._list_neighbors(p)          # batch18：直接打开 → 自动列邻居（含选中）
+            else:                                # 没索引库：退回按文件名搜
+                self.ed_kw.setText(os.path.splitext(os.path.basename(p))[0])
+                self.do_search()
             want = os.path.normcase(os.path.abspath(p))
             cur = -1
             for i, r in enumerate(self.rows):
@@ -2849,7 +3083,7 @@ class MainWindow(QMainWindow):
                     cur = i
                     break
             if cur < 0 and self.rows:
-                cur = 0                      # 库里没登记 → 仍打开文件，列表选第一个同名词
+                cur = 0                          # 库里没登记 → 仍打开文件，列表选第一个
             if cur >= 0:
                 self.tb.setCurrentCell(cur, 0)
                 self.on_pick()
@@ -3355,13 +3589,56 @@ class MainWindow(QMainWindow):
         self._reader_win = win
         win.resize(1200, 900)
         win.showMaximized()
+        self._bind_reader_shortcuts(win)      # batch18：独立窗口也要能用 Ctrl+F 查找
         self.statusBar().showMessage('阅读器已独立成窗口（可最大化 · F11 全屏）')
+
+    def _bind_reader_shortcuts(self, win):
+        """batch18：给独立阅读窗口挂上窗口级快捷键（Ctrl+F/Esc/F11）——
+        主窗口上的 QShortcut 在焦点落到独立窗口时不会触发。"""
+        try:
+            scs = []
+
+            def _mk(seq, slot):
+                sc = QShortcut(QKeySequence(seq), win)
+                try:
+                    sc.setContext(Qt.ShortcutContext.WindowShortcut)
+                except Exception:
+                    pass
+                sc.activated.connect(slot)
+                scs.append(sc)
+
+            _mk('Ctrl+F', self.find_focus)
+            _mk('Esc', self.find_close)
+            _mk('F11', lambda: self._reader_full(win))
+            try:
+                win._cv_sc = scs          # 持引用，避免被 GC
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+    def _reader_full(self, win):
+        """独立阅读窗口的 F11 全屏切换。"""
+        try:
+            if win.isFullScreen():
+                win.showMaximized()
+            else:
+                win.showFullScreen()
+        except Exception:
+            pass
 
     def _attach_reader(self, from_close=False):
         win = getattr(self, '_reader_win', None)
         if win is None:
             return
         self._reader_win = None
+        if getattr(self, '_closing', False):      # batch18：主窗口正在关闭 → 只清掉独立窗口
+            try:
+                win.hide()
+                win.deleteLater()
+            except Exception:
+                pass
+            return
         dk = getattr(self, '_nav_dock', None)
         if dk is not None:
             try:

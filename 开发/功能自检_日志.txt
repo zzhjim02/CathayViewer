@@ -1,5 +1,5 @@
 == CathayViewer 功能自检 ==
-root=D:\我的软件创作库\CathayViewer-DEV  db=C:\Users\zzhjim\AppData\Local\Temp\cv_selfcheck_j7b5hc4k\idx.db  files=4  epub_created=True
+root=D:\我的软件创作库\CathayViewer-DEV  db=C:\Users\zzhjim\AppData\Local\Temp\cv_selfcheck_6aiphvz6\idx.db  files=4  epub_created=True
  1. OK   建库 4 条                         files=4
  2. OK   搜索串接同书多版本                      raw=2 rows=1
  3. OK   版本下拉 >=2                       cb_ver.count=2
@@ -23,8 +23,8 @@ root=D:\我的软件创作库\CathayViewer-DEV  db=C:\Users\zzhjim\AppData\Local
 21. OK   Ctrl+K 历史写入+去重                 hist=['甲书', '丙书']
 22. OK   Ctrl+K 历史重跑                    hist=['甲书', '丙书'] ed='甲书' rows=1
 23. OK   Ctrl+D 保存搜索                    saved=['甲书'] msg='已保存搜索：甲书（Ctrl+K 查看/删除）'
-24. OK   打开两次 stats.opens==2            opens=2 secs=0.472 甲书.pdf
-25. OK   stats.secs>0 累加                max_secs=0.472 n=1
+24. OK   打开两次 stats.opens==2            opens=2 secs=0.490 甲书.pdf
+25. OK   stats.secs>0 累加                max_secs=0.490 n=1
 26. OK   Ctrl+Shift+H 统计列出 Top          len=194 has_top=True has_total=True
 27. OK   Ctrl+T EPUB 目录(大纲/页码)          items=1 pages=1 rows=1
 batch3 追加文件 + 增量刷新：add=7 files=11
@@ -41,8 +41,8 @@ batch3 追加文件 + 增量刷新：add=7 files=11
 38. OK   双击文本 → 阅读区有内容且不调外部             len=8 reader=text ext_calls=0
 39. OK   命令行带文件启动 → 阅读区                 loaded=True pd_path=甲书.pdf ext_calls=0
 40. OK   多文件参数只开首个+状态栏提示                reader=text msg='已在阅读区打开：甲书_【繁转简】.txt（另有 1 个文件参数已忽略）'
-41. OK   阅读区宽 > 左且 ≥窗口 55%              win=1200 left=387 right=790 right%=66%
-42. OK   分割条最小宽度约束生效                    left_after_zero=387 min=90
+41. OK   阅读区宽 > 左且 ≥窗口 55%              win=1200 left=340 right=837 right%=70%
+42. OK   分割条最小宽度约束生效（左栏可收起、阅读区保底）       left_after_zero=0 right=1177 min=48
 43. OK   外部打开保留为显式按钮                    btn_has_ext=True ext_calls=1
 batch5 追加文件 + 增量刷新：add=2 files=13
 44. OK   关联.bat 存在+ASCII+CRLF+含关键串      size=2967 ascii=True crlf=True pdf=True exe=True
@@ -52,14 +52,14 @@ batch5 追加文件 + 增量刷新：add=2 files=13
 48. OK   PgDn/PgUp/Ctrl+Home/Ctrl+End 可用 home=0 pgdn=1 pgup=0 end=11 ctrlhome=0 total=12
 49. OK   导航面板默认展开+目录页签+单击跳页             visible=True toc_rows=3 tab=0 jump_pgno=5
 50. OK   TXT 文内查找命中+下一个循环               total=51 idx 0->0 sel='正文' label='第 51 / 51 处'
-51. OK   PDF 文字层查找到已知词+跳页+结果列表          total=1 pgno=5 tab=1 hl='第 6 页' hit0={'path': 'C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_j7b5hc4k\\书库\\滚动测试.pdf', 'name': '滚动测试.pdf', 'page': 5, 'off': None, 'ctx': '滚动测试 第 6 页 正文内容', 'txt_mark': None}
+51. OK   PDF 文字层查找到已知词+跳页+结果列表          total=1 pgno=5 tab=1 hl='第 6 页' hit0={'path': 'C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_6aiphvz6\\书库\\滚动测试.pdf', 'name': '滚动测试.pdf', 'page': 5, 'off': None, 'ctx': '滚动测试 第 6 页 正文内容', 'txt_mark': None}
 52. OK   无文字层 PDF 给出 OCR 提示             msg='这个 PDF 没有文字层，需要先做 OCR（可以交给 CathayOCR）' total=0
 53. OK   非 PDF 打开时导航面板隐藏不报错             reader=text nav_hidden=True
 54. OK   Ctrl+F 显示 / Esc 关闭查找条          vis=True->False
 55. OK   同一页只渲染一次（缓存复用）                 render_counts=[1, 1, 1, 1, 1, 1, 1, 1, 1] cached=9
-56. OK   缩放切换后页码与页数不错乱                  total=12 [('适应宽度', 592, 838, True), ('适应页面', 488, 691, True), ('100%', 595, 842, True)]
+56. OK   缩放切换后页码与页数不错乱                  total=12 [('适应宽度', 639, 904, True), ('适应页面', 488, 691, True), ('100%', 595, 842, True)]
 57. OK   页码框输入跳页生效                      set5->pgno=4 clamp99->pgno=11 total=12
-58. OK   Ctrl+滚轮 缩放生效（PdfView）          zoom 99%->109% mode=custom box=109%
+58. OK   Ctrl+滚轮 缩放生效（PdfView）          zoom 107%->118% mode=custom box=118%
 59. OK   页码框输入 7 回车 → 当前页=7（1 基）        in7->pgno=6 box='7' | bad->pgno=6 box='7'
 60. OK   缩放回「适应宽度」后仍能继续滚动               scrolled pg 0->11 total=12
 61. OK   目录联动高亮随页变化                     toc_rows=3 ch2->row1 ch1->row0
@@ -72,7 +72,7 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 67. OK   跨文件全文检索（独立进程 worker）           rc=0 hits=1 files=1
 68. OK   目录单击即跳页                        pgno=5 (want 5)
 69. OK   版权/授权信息（文件名/目录/版权页）            auth=中华书局 lb_has=True
-70. OK   上级文件夹只显示上一级                    shown='乙辑' full='C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_j7b5hc4k\\书库\\甲编\\乙辑'
+70. OK   上级文件夹只显示上一级                    shown='乙辑' full='C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_6aiphvz6\\书库\\甲编\\乙辑'
 71. OK   单击文件名即打开（其它列不触发）               by_filename=True by_parent_not_opened=True
 72. OK   PDF 默认缩放=适应页面                  mode=fitp cb=1
 73. OK   PDF 跨页连选 + 复制                  pg0=(0, 4) pg1=(0, 3) text='滚动测试第1页正文内容\n滚动测试第2页'
@@ -80,8 +80,8 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 75. OK   「跨文件全文检索」按钮位于左栏                text='🔎 跨文件全文检索' in_reader=False
 76. OK   阅读器顶部紧凑（≤52px）                 lb_info=False find_bar=False top_off=29
 77. OK   阅读器可拆成独立窗口（🗗 切换）               reader_win=True
-78. OK   默认单窗口：左列表 ｜ 右阅读器（阅读器占大头）       merged=True panes=2 sizes=[387, 790]
-79. OK   窗口布局记忆（尺寸/位置 + 分割比例 + 是否拆窗）    geom=[120, 80, 1111, 777] split=[317, 317] det=False restoreW=1111 det2=True
+78. OK   默认单窗口：左列表 ｜ 右阅读器（阅读器占大头）       merged=True panes=2 sizes=[340, 837]
+79. OK   窗口布局记忆（尺寸/位置 + 分割比例 + 是否拆窗）    geom=[120, 80, 1111, 777] split=[240, 395] det=False restoreW=1111 det2=True
 80. OK   双击不重复打开（防重入）                   open_calls=1（双击只处理一次）
 81. OK   去重①②③④ + _opt 视为同名（仅留 PDF）     ①['书A_PD6AIFOCR.pdf'] ②['书B_PD6AIFOCR.pdf', '书B_PD6AIFOCR.txt'] ③['书C_PD6AIFOCR.pdf', '书C_PD6GJOCR.txt'] ④['书D_PD6AIFOCR.pdf', '书D_PD6AIFOCR_【繁转简】.txt'] opt['书E_PD6AIFOCR_opt.pdf']
 82. OK   跨文件检索把对应的 TXT 纳入范围             expanded=['书G_PD6AIFOCR.pdf', '书G_PD6AIFOCR.txt', '书G_PD6AIFOCR_【繁转简】.txt']
@@ -89,9 +89,9 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 84. OK   导航面板跟随阅读器（拆窗在阅读器侧 / 收回随主窗）     nav_in_reader=True back_to_main=True
 85. OK   被去重项单独标出（dedup_split：默认隐藏）     kept=['书H_PD6AIFOCR.pdf'] hidden=['书H_PD6AIFOCR.txt']
 86. OK   单文件结果：被去重项默认隐藏 + 一键展开          before=1 after=4 hidden=3 btn='▾ 收起被去重的 3 项'
-87. OK   文件列表：无行号列 + 文件名拉伸 + 上级文件夹自适应   vhead=False mode1=Stretch mode2=ResizeToContents
+87. OK   文件列表：无行号列 + 文件名拉伸 + 上级文件夹可缩    vhead=False mode1=Stretch mode2=Interactive
 88. OK   导航页签不拉伸（窗口小也不挤掉字）              expanding=False
-89. OK   PDF 适应窗口（窗口变化自动重排、左右不被裁）       fit='fitp' z1=1.005 z2=0.657 fits=True/True hmax=0
+89. OK   PDF 适应窗口（窗口变化自动重排、左右不被裁）       fit='fitp' z1=1.005 z2=0.731 fits=True/True hmax=0
 90. OK   版本下拉切换＝真的打开该版本                 vers=2 opened_ok=2
 91. OK   查找结果打不开时给提示、不崩；开 TXT 不清空计数     crashed=False msg='打不开这条结果：C:\\Users\\zzhjim\\' keep=True
 92. OK   ✂ 摘录选中文字 → 摘录本（含书名/页码）         reader=pdf file=True has_第1页=True
@@ -112,7 +112,7 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 107. OK   ⇄ 对读可切换 TXT 版本（OCR/繁简）         n=2 变体=True path=对读测试_【繁转简】.txt
 108. OK   ⇄ 对读可退出：只看 PDF / 只看 TXT        只看PDF=True pg=0 只看TXT=True
 109. OK   ⇄ 进对读：PDF 停原页，TXT 同步到该页        reader=dual 页码框=3 pgno=2
-110. OK   左栏可缩很小 + 「版本」下拉显示变宽            tb.min=90 cb_ver.max=360
+110. OK   左栏可拖得极窄（窄时按钮收进⋮）+ 「版本」下拉显示变宽   tb.min=48 cb_ver.max=360 窄=True 宽=True 拖后left=48
 111. OK   🗂 摘录查看器 / 编辑器（可列出并编辑）          list=2 recs=2
 112. OK   ⌛ 越界纪年（康熙63年）→公历年 + 提示实际纪年     康熙63=康熙六十三年【康熙六十三年=1724年（存疑：康熙共 | 光緖35=光绪三十五年【光绪三十五年=1909年（存疑：光绪共
 113. OK   ⌛ 反查：每个年号都注明是第几年               1898 => 明治三十一年、光绪二十四年、光武二年
@@ -120,8 +120,13 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 115. OK   拖入 PDF / TXT → 在阅读区打开          acceptDrops=True pdf=True txt=text ev=2
 116. OK   拖入多个 → 只开首个 + 提示其余忽略           reader=text msg='已在阅读区打开：对读测试.txt（另有 1 个拖入文件已忽略）'
 117. OK   双击关联：关联/取消关联脚本（PDF/TXT，含设为默认）  ascii=True crlf=True pdf/txt=True 默认=True/True
-118. OK   大 PDF 著录不卡：浅著录秒回 + 后台补深 + 缓存   首次=0.001s 深著录=True(0.0s) 缓存=True(0.002s)
+118. OK   大 PDF 著录不卡：浅著录秒回 + 后台补深 + 缓存   首次=0.001s 深著录=True(0.0s) 缓存=True(0.001s)
 119. OK   超大 TXT 只载入前 8 MB（不卡界面）+ 提示     MB=9.0 载入字符=2797496 msg='文件很大（9 MB）：为不卡界面，只载入前 8 MB（不静默'
 120. OK   超大 TXT：对读只载入前 8 MB，不自动进对读      trunc=True 字符=2797496 auto=False msg='这个 TXT 较大（9 MB）：未自动进入对读（对读'
-SUMMARY ok=120 fail=0
+121. OK   左栏一键收起/展开（Ctrl+Shift+L）        key=Ctrl+Shift+L collapsed=0 back=340
+122. OK   独立阅读窗口 Ctrl+F 可打开查找条           keys=['Ctrl+F', 'Esc', 'F11'] ctx=['WindowShortcut', 'WindowShortcut', 'WindowShortcut'] shown=True
+123. OK   最小化文件列表窗口不带走独立阅读器窗口            parent=None 主窗最小化后阅读器未被带走=True 收回=True
+124. OK   直接打开文件 → 左栏列出同文件夹 + 相似文件名      n=5 cur=甲书补遗.pdf 同架=True 相似=True
+125. OK   直接打开孤立文件也不报错（左栏至少含它自己）         n=1 cur=己书.pdf
+SUMMARY ok=125 fail=0
 RESULT = OK

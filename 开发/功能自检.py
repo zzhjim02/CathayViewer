@@ -33,6 +33,12 @@
   双击关联：关联·取消关联脚本含 PDF/TXT 并设为默认）。
 + batch16 新增 3 项（118-120：大 PDF 著录不卡（浅著录秒回 + 后台补深 + 缓存）/
   超大 TXT 只载入前 8 MB + 提示 / 超大 TXT 对读截断且不自动进对读）。
++ batch17 改进 1 项（121：左栏可拖得极窄·窄时按钮收进「⋮」·一键收起/展开 Ctrl+Shift+L）。
++ batch18 新增 4 项（122-125：独立阅读窗口 Ctrl+F 可用 / 最小化文件列表窗口不带走阅读器 /
+  直接打开文件→左栏列同文件夹+相似文件名 / 直接打开孤立文件不出错）。
+最后输出 SUMMARY ok=N fail=M（当前 **125/125**）。
++ batch17：左侧文件列表可拖得極窄（min 48px，窄时动作按钮收进「⋮」菜单、
+  自动收起「上级文件夹」列），新增 Ctrl+Shift+L 收起/展开左栏（测试 110 已扩充）。
 + batch16 新增 3 项（118-120：大 PDF 著录不卡（浅著录秒回 + 后台补深 + 缓存）/ 超大 TXT 只载前 8MB
   + 提示 / 超大 TXT 对读只载前 8MB且不自动进对读）。
 最后输出 SUMMARY ok=N fail=M（当前 **120/120**）。
@@ -844,15 +850,18 @@ def main():
     step(41, '阅读区宽 > 左且 ≥窗口 55%', split_ratio)
 
     def split_min():
+        # batch17：左栏可收起（可拖到 0），但阅读区有最小宽度（≥200）
         w._split.setSizes([0, 9999])
         app.processEvents()
         left = w._split.sizes()[0]
+        right = w._split.sizes()[1]
         mn = w.tb.minimumWidth()
         w._split.setSizes([340, 1160])
         app.processEvents()
-        return (left >= mn and mn > 0, 'left_after_zero=%d min=%d' % (left, mn))
+        return (left >= 0 and left <= mn + 10 and mn > 0 and mn <= 60 and right >= 200,
+                'left_after_zero=%d right=%d min=%d' % (left, right, mn))
 
-    step(42, '分割条最小宽度约束生效', split_min)
+    step(42, '分割条最小宽度约束生效（左栏可收起、阅读区保底）', split_min)
 
     def ext_button():
         btns = ' '.join(b.text() for b in getattr(w, '_btn_widgets', []))
@@ -1817,12 +1826,12 @@ def main():
         hh = w.tb.horizontalHeader()
         okv = (not w.tb.verticalHeader().isVisible()
                and hh.sectionResizeMode(1) == QHeaderView.ResizeMode.Stretch
-               and hh.sectionResizeMode(2) == QHeaderView.ResizeMode.ResizeToContents)
+               and hh.sectionResizeMode(2) == QHeaderView.ResizeMode.Interactive)
         return (okv, 'vhead=%r mode1=%s mode2=%s'
                 % (w.tb.verticalHeader().isVisible(),
                    hh.sectionResizeMode(1).name, hh.sectionResizeMode(2).name))
 
-    step(87, '文件列表：无行号列 + 文件名拉伸 + 上级文件夹自适应', list_cols)
+    step(87, '文件列表：无行号列 + 文件名拉伸 + 上级文件夹可缩', list_cols)
 
     def tabs_compact():
         w._build_nav_dock()
@@ -2363,10 +2372,27 @@ def main():
     step(109, '⇄ 进对读：PDF 停原页，TXT 同步到该页', dual_keep_page)
 
     def left_width():
-        return (w.tb.minimumWidth() <= 100 and w.cb_ver.maximumWidth() >= 300,
-                'tb.min=%s cb_ver.max=%s' % (w.tb.minimumWidth(), w.cb_ver.maximumWidth()))
+        # batch17：可拖得极窄（min≤60）且左栏按钮在窄时收进「⋮」
+        _mn = w.tb.minimumWidth()
+        w._fit_left_buttons(200)
+        narrow_ok = (not w.b_fts.isVisible() or w.b_fts.isHidden()) and not w.b_more.isHidden() \
+            and w.tb.isColumnHidden(2)
+        w._fit_left_buttons(520)
+        wide_ok = not w.b_fts.isHidden() and w.b_more.isHidden() and not w.tb.isColumnHidden(2)
+        # 分割条能拖到极窄（窄模式下左栏实际宽度可小）
+        w._fit_left_buttons(160)
+        w._split.setSizes([48, max(400, w.width() - 48)])
+        app.processEvents()
+        lw = w._split.sizes()[0]
+        w._fit_left_buttons(520)
+        w._split.setSizes([340, max(400, w.width() - 340)])
+        app.processEvents()
+        return (w.tb.minimumWidth() <= 60 and w.cb_ver.maximumWidth() >= 300
+                and narrow_ok and wide_ok and lw <= 70,
+                'tb.min=%s cb_ver.max=%s 窄=%s 宽=%s 拖后left=%s'
+                % (w.tb.minimumWidth(), w.cb_ver.maximumWidth(), narrow_ok, wide_ok, lw))
 
-    step(110, '左栏可缩很小 + 「版本」下拉显示变宽', left_width)
+    step(110, '左栏可拖得极窄（窄时按钮收进⋮）+ 「版本」下拉显示变宽', left_width)
 
     def excerpt_viewer_open():
         for d in (200, 600, 1200, 2000):
@@ -2552,6 +2578,124 @@ def main():
         return (ok, 'trunc=%s 字符=%d auto=%s msg=%r' % (trunc, n, r, msg[:26]))
 
     step(120, '超大 TXT：对读只载入前 8 MB，不自动进对读', dual_big_skip)
+
+    def list_toggle():
+        w._split.setSizes([340, max(400, w.width() - 340)])
+        app.processEvents()
+        key = w._listk.key().toString()
+        w.toggle_list()
+        app.processEvents()
+        collapsed = w._split.sizes()[0]
+        w.toggle_list()
+        app.processEvents()
+        back = w._split.sizes()[0]
+        return (key == 'Ctrl+Shift+L' and collapsed == 0 and back > 100,
+                'key=%s collapsed=%s back=%s' % (key, collapsed, back))
+
+    step(121, '左栏一键收起/展开（Ctrl+Shift+L）', list_toggle)
+
+    # ---------------- batch18（122-125）：独立窗口快捷键 / 最小化互不影响 / 直接打开列邻居 ----
+    def detach_ctrl_f():
+        p = pick('甲书.pdf') or pick('对读测试.pdf')
+        if not p:
+            return (False, '未选中')
+        w.preview_here()
+        app.processEvents()
+        if w._reader_win is None:
+            w._detach_reader()
+        app.processEvents()
+        win = w._reader_win
+        if win is None:
+            return (False, '未生成独立窗口')
+        scs = list(getattr(win, '_cv_sc', []) or [])
+        keys = [s.key().toString() for s in scs]
+        ctx = [s.context().name for s in scs]
+        f_sc = next((s for s in scs if s.key().toString() == 'Ctrl+F'), None)
+        if f_sc is not None:
+            try:
+                f_sc.activated.emit()
+            except Exception:
+                pass
+        app.processEvents()
+        shown = not w._find_bar_widget.isHidden()
+        ok = ('Ctrl+F' in keys and 'Esc' in keys
+              and all(c == 'WindowShortcut' for c in ctx)
+              and f_sc is not None and f_sc.isEnabled() and shown)
+        w.find_close()
+        return (ok, 'keys=%s ctx=%s shown=%s' % (keys, ctx, shown))
+
+    step(122, '独立阅读窗口 Ctrl+F 可打开查找条', detach_ctrl_f)
+
+    def detach_minimize():
+        win = w._reader_win
+        if win is None:
+            return (False, '没有独立窗口')
+        indep = (win.parent() is None)
+        w.showMinimized()
+        app.processEvents()
+        kept = (not win.isMinimized())
+        w.showNormal()
+        app.processEvents()
+        w._attach_reader()
+        app.processEvents()
+        back = (w._reader_win is None)
+        return (indep and kept and back,
+                'parent=%s 主窗最小化后阅读器未被带走=%s 收回=%s' % (win.parent(), kept, back))
+
+    step(123, '最小化文件列表窗口不带走独立阅读器窗口', detach_minimize)
+
+    def open_neighbors():
+        d1 = os.path.join(src, '同架')
+        d2 = os.path.join(src, '别处')
+        os.makedirs(d1, exist_ok=True)
+        os.makedirs(d2, exist_ok=True)
+        p1 = os.path.join(d1, '甲书补遗.pdf')      # 打开的这个（在「同架」）
+        p2 = os.path.join(d1, '乙书.pdf')          # 同文件夹的其他文件
+        p3 = os.path.join(d2, '甲书续编.pdf')      # 别处但文件名相似
+        for p in (p1, p2, p3):
+            if not os.path.isfile(p):
+                _d = fitz.open()
+                ins(_d.new_page(), (72, 100), '甲书 补遗', 14)
+                _d.save(p)
+                _d.close()
+        try:
+            C.refresh(db, [src])
+        except Exception:
+            pass
+        w.open_path_in_reader(p1)
+        app.processEvents()
+        names = [r.get('name') for r in w.rows]
+        cur = w.tb.currentRow()
+        curname = w.rows[cur].get('name') if 0 <= cur < len(w.rows) else ''
+        ok = ('甲书补遗.pdf' in names and '乙书.pdf' in names
+              and '甲书续编.pdf' in names and '甲书.pdf' in names
+              and curname == '甲书补遗.pdf')
+        return (ok, 'n=%d cur=%s 同架=%s 相似=%s'
+                % (len(names), curname, '乙书.pdf' in names, '甲书续编.pdf' in names))
+
+    step(124, '直接打开文件 → 左栏列出同文件夹 + 相似文件名', open_neighbors)
+
+    def open_neighbors_unique():
+        d3 = os.path.join(src, '独处')
+        os.makedirs(d3, exist_ok=True)
+        p3 = os.path.join(d3, '己书.pdf')
+        if not os.path.isfile(p3):
+            _d = fitz.open()
+            ins(_d.new_page(), (72, 100), '己书', 14)
+            _d.save(p3)
+            _d.close()
+        try:
+            C.refresh(db, [src])
+        except Exception:
+            pass
+        w.open_path_in_reader(p3)
+        app.processEvents()
+        names = [r.get('name') for r in w.rows]
+        cur = w.tb.currentRow()
+        curname = w.rows[cur].get('name') if 0 <= cur < len(w.rows) else ''
+        return (curname == '己书.pdf' and len(names) >= 1, 'n=%d cur=%s' % (len(names), curname))
+
+    step(125, '直接打开孤立文件也不报错（左栏至少含它自己）', open_neighbors_unique)
     try:
         w.close()
     except Exception:

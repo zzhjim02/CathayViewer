@@ -450,6 +450,38 @@ def search(db, kw, limit=500):
         c.close()
 
 
+def by_dir(db, d, limit=500):
+    """同一文件夹下已索引的文件（直接打开某文件时列出“同文件夹的其他文件”）。只读。"""
+    if not os.path.isfile(db) or not d:
+        return []
+    c = connect(db, readonly=True)
+    try:
+        try:
+            rows = c.execute('SELECT * FROM files WHERE dir=? COLLATE NOCASE '
+                             'ORDER BY name LIMIT ?', (d, limit)).fetchall()
+        except sqlite3.Error:
+            rows = []
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
+def like_stem(db, core, limit=300):
+    """书名主干相似（前缀相同）的其它文件（不限文件夹）。只读。"""
+    if not os.path.isfile(db) or not core:
+        return []
+    c = connect(db, readonly=True)
+    try:
+        try:
+            rows = c.execute('SELECT * FROM files WHERE stem LIKE ? ORDER BY name LIMIT ?',
+                             (core + '%', limit)).fetchall()
+        except sqlite3.Error:
+            rows = []
+        return [dict(r) for r in rows]
+    finally:
+        c.close()
+
+
 def stats(db):
     if detect_db(db) == 'cathayindex':
         return _stats_foreign(db)
