@@ -80,12 +80,18 @@ def archive_old(path, ts):
 
 
 def _clean_in_place(root):
-    """原地刷新时，清掉不该在发布包里的文件/目录（db/缓存/调试）。"""
+    """原地刷新时，清掉不该在发布包里的文件/目录（缓存/调试脚本）。
+
+    注意：**绝不删除运行期文件**（索引库、设置、自检日志）——那是用户的数据，
+    它们本来就不会被拷进包，不必删。
+    """
     for dp, dns, fns in os.walk(root, topdown=False):
         rel_dir = os.path.relpath(dp, root)
         rel_dir = '' if rel_dir == '.' else rel_dir
         for fn in fns:
             rel = os.path.join(rel_dir, fn) if rel_dir else fn
+            if os.path.basename(fn).lower() in EXCLUDE_FILES:
+                continue                     # 索引库/设置/自检日志：保留
             if _skip(rel):
                 try:
                     os.remove(os.path.join(dp, fn))

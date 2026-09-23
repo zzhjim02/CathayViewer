@@ -1,5 +1,5 @@
 == CathayViewer 功能自检 ==
-root=D:\我的软件创作库\CathayViewer-DEV  db=C:\Users\zzhjim\AppData\Local\Temp\cv_selfcheck_6aiphvz6\idx.db  files=4  epub_created=True
+root=D:\我的软件创作库\CathayViewer-DEV  db=C:\Users\zzhjim\AppData\Local\Temp\cv_selfcheck_ud_4_vpv\idx.db  files=4  epub_created=True
  1. OK   建库 4 条                         files=4
  2. OK   搜索串接同书多版本                      raw=2 rows=1
  3. OK   版本下拉 >=2                       cb_ver.count=2
@@ -23,8 +23,8 @@ root=D:\我的软件创作库\CathayViewer-DEV  db=C:\Users\zzhjim\AppData\Local
 21. OK   Ctrl+K 历史写入+去重                 hist=['甲书', '丙书']
 22. OK   Ctrl+K 历史重跑                    hist=['甲书', '丙书'] ed='甲书' rows=1
 23. OK   Ctrl+D 保存搜索                    saved=['甲书'] msg='已保存搜索：甲书（Ctrl+K 查看/删除）'
-24. OK   打开两次 stats.opens==2            opens=2 secs=0.490 甲书.pdf
-25. OK   stats.secs>0 累加                max_secs=0.490 n=1
+24. OK   打开两次 stats.opens==2            opens=2 secs=0.507 甲书.pdf
+25. OK   stats.secs>0 累加                max_secs=0.507 n=1
 26. OK   Ctrl+Shift+H 统计列出 Top          len=194 has_top=True has_total=True
 27. OK   Ctrl+T EPUB 目录(大纲/页码)          items=1 pages=1 rows=1
 batch3 追加文件 + 增量刷新：add=7 files=11
@@ -52,7 +52,7 @@ batch5 追加文件 + 增量刷新：add=2 files=13
 48. OK   PgDn/PgUp/Ctrl+Home/Ctrl+End 可用 home=0 pgdn=1 pgup=0 end=11 ctrlhome=0 total=12
 49. OK   导航面板默认展开+目录页签+单击跳页             visible=True toc_rows=3 tab=0 jump_pgno=5
 50. OK   TXT 文内查找命中+下一个循环               total=51 idx 0->0 sel='正文' label='第 51 / 51 处'
-51. OK   PDF 文字层查找到已知词+跳页+结果列表          total=1 pgno=5 tab=1 hl='第 6 页' hit0={'path': 'C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_6aiphvz6\\书库\\滚动测试.pdf', 'name': '滚动测试.pdf', 'page': 5, 'off': None, 'ctx': '滚动测试 第 6 页 正文内容', 'txt_mark': None}
+51. OK   PDF 文字层查找到已知词+跳页+结果列表          total=1 pgno=5 tab=1 hl='第 6 页' hit0={'path': 'C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_ud_4_vpv\\书库\\滚动测试.pdf', 'name': '滚动测试.pdf', 'page': 5, 'off': None, 'ctx': '滚动测试 第 6 页 正文内容', 'txt_mark': None}
 52. OK   无文字层 PDF 给出 OCR 提示             msg='这个 PDF 没有文字层，需要先做 OCR（可以交给 CathayOCR）' total=0
 53. OK   非 PDF 打开时导航面板隐藏不报错             reader=text nav_hidden=True
 54. OK   Ctrl+F 显示 / Esc 关闭查找条          vis=True->False
@@ -72,7 +72,7 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 67. OK   跨文件全文检索（独立进程 worker）           rc=0 hits=1 files=1
 68. OK   目录单击即跳页                        pgno=5 (want 5)
 69. OK   版权/授权信息（文件名/目录/版权页）            auth=中华书局 lb_has=True
-70. OK   上级文件夹只显示上一级                    shown='乙辑' full='C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_6aiphvz6\\书库\\甲编\\乙辑'
+70. OK   上级文件夹只显示上一级                    shown='乙辑' full='C:\\Users\\zzhjim\\AppData\\Local\\Temp\\cv_selfcheck_ud_4_vpv\\书库\\甲编\\乙辑'
 71. OK   单击文件名即打开（其它列不触发）               by_filename=True by_parent_not_opened=True
 72. OK   PDF 默认缩放=适应页面                  mode=fitp cb=1
 73. OK   PDF 跨页连选 + 复制                  pg0=(0, 4) pg1=(0, 3) text='滚动测试第1页正文内容\n滚动测试第2页'
@@ -128,5 +128,6 @@ batch6 追加文件 + 增量刷新：add=3 files=16
 123. OK   最小化文件列表窗口不带走独立阅读器窗口            parent=None 主窗最小化后阅读器未被带走=True 收回=True
 124. OK   直接打开文件 → 左栏列出同文件夹 + 相似文件名      n=5 cur=甲书补遗.pdf 同架=True 相似=True
 125. OK   直接打开孤立文件也不报错（左栏至少含它自己）         n=1 cur=己书.pdf
-SUMMARY ok=125 fail=0
+126. OK   PDV5/PDV6 后缀与其他后缀归为同一本（可切换版本）  rows=1 版本=7 书主干={'第3辑外交'}
+SUMMARY ok=126 fail=0
 RESULT = OK

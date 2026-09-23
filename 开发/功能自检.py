@@ -36,7 +36,8 @@
 + batch17 改进 1 项（121：左栏可拖得极窄·窄时按钮收进「⋮」·一键收起/展开 Ctrl+Shift+L）。
 + batch18 新增 4 项（122-125：独立阅读窗口 Ctrl+F 可用 / 最小化文件列表窗口不带走阅读器 /
   直接打开文件→左栏列同文件夹+相似文件名 / 直接打开孤立文件不出错）。
-最后输出 SUMMARY ok=N fail=M（当前 **125/125**）。
++ batch19 修复 1 项（126：PDV5/PDV6 后缀（_PDV5AIFOCR 等）与其他后缀归为同一本）。
+最后输出 SUMMARY ok=N fail=M（当前 **126/126**）。
 + batch17：左侧文件列表可拖得極窄（min 48px，窄时动作按钮收进「⋮」菜单、
   自动收起「上级文件夹」列），新增 Ctrl+Shift+L 收起/展开左栏（测试 110 已扩充）。
 + batch16 新增 3 项（118-120：大 PDF 著录不卡（浅著录秒回 + 后台补深 + 缓存）/ 超大 TXT 只载前 8MB
@@ -2696,6 +2697,45 @@ def main():
         return (curname == '己书.pdf' and len(names) >= 1, 'n=%d cur=%s' % (len(names), curname))
 
     step(125, '直接打开孤立文件也不报错（左栏至少含它自己）', open_neighbors_unique)
+
+    # ---------------- batch19（126）：PDV5/PDV6 后缀也能归到同一本（用户报） ----------------
+    def pdv_group():
+        _d = os.path.join(src, '第3辑')
+        os.makedirs(_d, exist_ok=True)
+        _pdf = os.path.join(_d, '第3辑外交_OCR_PD5AIOCR.pdf')
+        if not os.path.isfile(_pdf):
+            _x = fitz.open()
+            ins(_x.new_page(), (72, 100), '第3辑外交', 14)
+            _x.save(_pdf)
+            _x.close()
+        for n in ('第3辑外交_OCR.txt', '第3辑外交_OCR_PD5AIOCR.txt',
+                  '第3辑外交_OCR_PD5AIOCR_【简转繁】.txt',
+                  '第3辑外交_PDV5AIFOCR.txt', '第3辑外交_PDV5AIFOCR_【简转繁】.txt',
+                  '第3辑外交_PDV6AIFOCR.txt'):
+            p = os.path.join(_d, n)
+            if not os.path.isfile(p):
+                open(p, 'w', encoding='utf-8').write('第3辑外交 正文')
+        try:
+            C.refresh(db, [src])
+        except Exception:
+            pass
+        w.ed_kw.setText('第3辑外交')
+        w.do_search()
+        app.processEvents()
+        n_rows = len(w.rows)
+        cur = next((i for i, r in enumerate(w.rows)
+                    if '第3辑外交' in (r.get('name') or '')), 0)
+        w.tb.setCurrentCell(cur, 0)
+        w.on_pick()
+        app.processEvents()
+        n_ver = w.cb_ver.count()
+        keys = set(META.book_core(n) for n in (
+            '第3辑外交_OCR.txt', '第3辑外交_PDV5AIFOCR.txt', '第3辑外交_PDV6AIFOCR.txt',
+            '第3辑外交_OCR_PD5AIOCR.pdf', '第3辑外交_PDV5AIFOCR_【简转繁】.txt'))
+        ok = (n_rows <= 2 and n_ver >= 3 and keys == {'第3辑外交'})
+        return (ok, 'rows=%d 版本=%d 书主干=%s' % (n_rows, n_ver, keys))
+
+    step(126, 'PDV5/PDV6 后缀与其他后缀归为同一本（可切换版本）', pdv_group)
     try:
         w.close()
     except Exception:

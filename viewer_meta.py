@@ -11,7 +11,7 @@ import re
 # ---- 产物/噪声后缀（与 CathayShelf、CathayPDG 一致）
 NOISE_TOK = re.compile(
     r'(ocr\s*优化|ocr优化版|orpalis\s*优化|orp\s*优化|zhelper[-\s]?search|zhelper|'
-    r'(?:pd(?:vl)?\d*)?(?:ai)?f?ocr|layered|result|unlocked|清晰扫描版|扫描版|'
+    r'(?:pd[a-z]{0,2}\d*)?(?:ai)?f?ocr|layered|result|unlocked|清晰扫描版|扫描版|'
     r'【?\s*(?:繁转简|简转繁|繁转繁)\s*】?|纯文本|可搜索版|opt)', re.I)
 TAIL_JUNK = re.compile(r'[\s_\-—+·、.]+$')
 SSID_RE = re.compile(r'(?<![0-9])(\d{6,10})(?![0-9])')
@@ -57,7 +57,9 @@ def book_core(name):
 # ---- batch9：检索去重（用户口径：只忽略 _opt；不去 OCR 引擎标记 / 不去编号 / 不去繁简标记）
 _OPT_TOK = re.compile(r'(?i)[\s_\-—+]*opt(?=[\s_\-—+（(【\[]|$|\.)')
 _TRAD_MARK = re.compile(r'【\s*(?:繁转简|简转繁|繁转繁)\s*】|[_\-—](?:繁转简|简转繁|繁转繁)')
-_ENG_TAG = re.compile(r'(?i)[\s_\-—+]*(?:pd(?:vl)?\d*)?[a-z]{0,6}ocr[\s_\-—+]*$')
+_ENG_TAG = re.compile(r'(?i)[\s_\-—+]*(?:pd[a-z]{0,2}\d*)?[a-z]{0,6}ocr[\s_\-—+]*$')
+# 任意位置的 OCR 引擎标记（仅在 family_key 里剥，用于跨文件检索扩样）
+_ANY_OCR = re.compile(r'(?i)[\s_\-—+]*(?:pd[a-z]{0,2}\d*)?(?:ai)?f?ocr[\s_\-—+]*')
 
 
 def same_name_key(name):
@@ -79,6 +81,7 @@ def family_key(name):
     s = _nw(os.path.splitext(str(name))[0])
     s = _OPT_TOK.sub('', s)
     s = _TRAD_MARK.sub('', s)
+    s = _ANY_OCR.sub('', s)          # batch19：任意位置的 OCR 引擎标记（PD5AIOCR/PDV5AIFOCR…）
     s = _ENG_TAG.sub('', s)
     s = re.sub(r'[\s_\-—+·、.]+$', '', s)
     s = re.sub(r'^[\s_\-—+·、]+', '', s)
@@ -482,8 +485,12 @@ def _detect_trad(text):
 # ---- 四个来源 ----------------------------------------------------------
 
 _TXT_SUFFIXES = ('_result', '_PD6AIFOCR', '_PD6AIOCR', '_PDVL6AIFOCR', '_PDVL6AIOCR',
-                 '_【繁转简】', '_PD6AIFOCR_【繁转简】', '_PDVL6AIFOCR_【繁转简】',
-                 '_【简转繁】')
+                 '_PDV6AIFOCR', '_PDV6AIOCR', '_PDV5AIFOCR', '_PDV5AIOCR',
+                 '_PD5AIFOCR', '_PD5AIOCR', '_PDL5AIFOCR', '_PDL5AIOCR',
+                 '_【繁转简】', '_【简转繁】',
+                 '_PD6AIFOCR_【繁转简】', '_PDVL6AIFOCR_【繁转简】',
+                 '_PDV6AIFOCR_【简转繁】', '_PDV5AIFOCR_【简转繁】',
+                 '_PDV5AIOCR_【简转繁】', '_PD6AIFOCR_【简转繁】')
 
 
 def _read_head(path, limit=400000):
@@ -560,7 +567,7 @@ def _sibling_texts(path):
                         found.append(p)
     except OSError:
         pass
-    found.sort(key=lambda p: (1 if '繁转简' in os.path.basename(p) else 0))
+    found.sort(key=lambda p: (1 if re.search(r'[繁简]转[繁简]', os.path.basename(p)) else 0))
     return found
 
 
@@ -1018,6 +1025,10 @@ def selftest():
         ('孙中山全集 第三册_10490188_PD6AIFOCR.pdf',
          {'volume': '第三册', 'ssid': '10490188'}),
         ('鲒埼亭集_PDVL6AIFOCR_【繁转简】.txt', {'tail': '_【繁转简】'}),
+        ('第3辑外交_PDV5AIFOCR.txt', {'name': '第3辑外交', 'volume': '第3辑'}),
+        ('第3辑外交_PDV5AIFOCR_【简转繁】.txt', {'name': '第3辑外交'}),
+        ('第3辑外交_OCR_PD5AIOCR.pdf', {'name': '第3辑外交'}),
+        ('某书_PDV6AIFOCR_【繁转简】.txt', {'tail': '_【繁转简】'}),
         ('中国伪书综考（全1册）（邓瑞全 王冠英编著 合肥 黄山书社1998年）.pdf',
          {'volume': '全1册'}),
         ('（可打印版）金翼英文版扫描版-全篇_unlocked_PD6AIOCR.pdf', {}),
@@ -1051,6 +1062,23 @@ def selftest():
     c = cite(ps[2], page='27')
     ok(c.startswith('布罗代尔：《十五至十八世纪的物质文明') and c.endswith('第27页。'),
        '引用：%s' % c)
+    # batch19：PDV5/PDV6 后缀也能归到同一本（用户报的 BUG）
+    fam = [(n, book_core(n), family_key(n), same_name_key(n)) for n in (
+        '第3辑外交_OCR.txt',
+        '第3辑外交_OCR_PD5AIOCR.pdf',
+        '第3辑外交_OCR_PD5AIOCR.txt',
+        '第3辑外交_PDV5AIFOCR.txt',
+        '第3辑外交_PDV5AIFOCR_【简转繁】.txt',
+        'X_PDV6AIFOCR.pdf',
+        'X_PDV6AIOCR_【繁转简】.txt',
+        'X_PDVL6AIFOCR.txt',
+    )]
+    cores = set(x[1] for x in fam if x[0].startswith('第3辑外交'))
+    ok(cores == {'第3辑外交'}, 'PDV5/PD6 后缀：书主干一致 → %s' % cores)
+    fams = set(x[2] for x in fam if x[0].startswith('第3辑外交'))
+    ok(fams == {'第3辑外交'}, 'PDV5/PD6 后缀：族键一致 → %s' % fams)
+    fams6 = set(x[2] for x in fam if x[0].startswith('X_'))
+    ok(fams6 == {'x'}, 'PDV6/PDVL6 后缀：族键一致 → %s' % fams6)
     _selftest_deep(ok)
     _selftest_rights(ok)
     txt = '\n'.join(log) + '\nresult = %s\n' % (
