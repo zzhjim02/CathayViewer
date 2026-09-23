@@ -54,6 +54,84 @@ def book_core(name):
     return s.strip()
 
 
+# ---- batch9：检索去重（用户口径：只忽略 _opt；不去 OCR 引擎标记 / 不去编号 / 不去繁简标记）
+_OPT_TOK = re.compile(r'(?i)[\s_\-—+]*opt(?=[\s_\-—+（(【\[]|$|\.)')
+_TRAD_MARK = re.compile(r'【\s*(?:繁转简|简转繁|繁转繁)\s*】|[_\-—](?:繁转简|简转繁|繁转繁)')
+_ENG_TAG = re.compile(r'(?i)[\s_\-—+]*(?:pd(?:vl)?\d*)?[a-z]{0,6}ocr[\s_\-—+]*$')
+
+
+def same_name_key(name):
+    """「完全同名」判定键：去扩展名 + 全角转半角/清私用区 + 仅忽略 _opt（返回小写）。"""
+    s = _nw(os.path.splitext(str(name))[0])
+    s = _OPT_TOK.sub('', s)
+    s = re.sub(r'[\s_\-—+·、.]+$', '', s)
+    s = re.sub(r'^[\s_\-—+·、]+', '', s)
+    return s.strip().lower()
+
+
+def is_trad_variant(name):
+    """是否为「繁转简/简转繁」变体（这类 TXT 一律不隐藏 —— batch9 规则④）。"""
+    return bool(_TRAD_MARK.search(str(name)))
+
+
+def family_key(name):
+    """同一本书的「族键」（仅用于检索范围扩样）：在同名键基础上再去掉 OCR 引擎标记与繁简标记。"""
+    s = _nw(os.path.splitext(str(name))[0])
+    s = _OPT_TOK.sub('', s)
+    s = _TRAD_MARK.sub('', s)
+    s = _ENG_TAG.sub('', s)
+    s = re.sub(r'[\s_\-—+·、.]+$', '', s)
+    s = re.sub(r'^[\s_\-—+·、]+', '', s)
+    return s.strip().lower()
+
+
+def _ext_of(name):
+    return os.path.splitext(str(name))[1].lower()
+
+
+def dedup_files(files):
+    """batch9 去重：只在「同一目录、PDF 与其同名 TXT」成对时动手。
+    ① 命中数相同 → 隐藏 TXT；② 命中数不同 → 都留，TXT 打 txt_mark；
+    ③ 不同 OCR 引擎的 TXT（名字不同）→ 都留；④ 繁转简/简转繁 TXT → 一律不隐藏；
+    其余文件一律保留。files: [{'name','path','count',...}] → 返回过滤后的新列表。
+    """
+    groups = {}
+    for f in files:
+        p = f.get('path') or f.get('name') or ''
+        d = os.path.normcase(os.path.dirname(os.path.abspath(p)))
+        groups.setdefault(d, []).append(f)
+    out = []
+    for _, grp in groups.items():
+        pdfs = [f for f in grp if _ext_of(f.get('name')) == '.pdf']
+        for f in grp:
+            g = dict(f)
+            if _ext_of(g.get('name')) not in ('.txt', '.text'):
+                out.append(g)
+                continue
+            k = same_name_key(g.get('name'))
+            peers = [p for p in pdfs if same_name_key(p.get('name')) == k]
+            if not peers:
+                out.append(g)
+                continue
+            if is_trad_variant(g.get('name')):            # ④ 繁简变体豁免
+                g['txt_mark'] = True
+                out.append(g)
+                continue
+            if any(int(p.get('count') or 0) == int(g.get('count') or 0) for p in peers):
+                continue                                  # ① 隐藏 TXT
+            g['txt_mark'] = True                          # ② 显示并标注
+            out.append(g)
+    return out
+
+
+def dedup_split(files):
+    """返回 (kept, hidden)：hidden = 因规则①被隐藏的 TXT 项（默认不显示，可手动展开）。"""
+    kept = dedup_files(files)
+    kk = {(f.get('path'), f.get('name')) for f in kept}
+    hidden = [f for f in files if (f.get('path'), f.get('name')) not in kk]
+    return kept, hidden
+
+
 def parse(name, path='', deep=None):
     """入口：当给了存在意义的 path（且 deep 不为 False）时，走「四来源深度著录」parse_deep；
     否则只解析文件名。保持旧签名兼容 —— parse(name) 行为与从前完全一致。"""
@@ -682,7 +760,79 @@ def parse_deep(name, path=''):
     res['src'] = src
     res['colophon'] = colophon
     res['txt_src'] = txt_hit
+    # 版权 / 授权信息：文件名 + 上级目录链 + 版权页 三来源合并
+    try:
+        rights, rsrc = _rights_scan(name, path, colophon)
+    except Exception:
+        rights, rsrc = {}, {}
+    res['rights'] = rights
+    res['rights_src'] = rsrc
+    for _k in ('authorization', 'copyright_holder', 'copyright_line',
+               'isbn', 'edition', 'printing', 'pub_date', 'rights_holder'):
+        res.setdefault(_k, rights.get(_k, ''))
     return res
+
+
+# ---- 版权 / 授权信息（batch7：文件名 + 上级目录 + 版权页 三来源合并）
+_RIGHTS_PATS = [
+    ('authorization', re.compile(
+        r'(?:据|根據|根据|經|经)?\s*([\u4e00-\u9fa5A-Za-z0-9·（）()]{2,30}?)\s*'
+        r'(?:獨家授權|独家授权|授權|授权)(?:影印|重印|出版|刊行|發行|发行)?')),
+    ('copyright_holder', re.compile(
+        r'(?:版權所有|版权所有|著作權所有|著作权所有|版權|版权|著作权|著作權)\s*[:：]?\s*'
+        r'([\u4e00-\u9fa5A-Za-z0-9·（）()]{2,40})')),
+    ('copyright_line', re.compile(r'(?:©|\(C\))\s*([\u4e00-\u9fa5A-Za-z0-9·（）()]{2,40})')),
+    ('isbn', re.compile(r'ISBN\s*[:：]?\s*([0-9\-xX]{10,20})')),
+    ('edition', re.compile(r'第\s*([0-9一二三四五六七八九十]{1,3})\s*版')),
+    ('printing', re.compile(r'第\s*([0-9一二三四五六七八九十]{1,3})\s*次印刷')),
+    ('pub_date', re.compile(r'((?:19|20)\d{2})\s*年\s*([0-9]{1,2})?\s*月?')),
+    ('rights_holder', re.compile(r'(?:出版發行|出版发行|出版者|印刷發行|印刷发行)\s*[:：]?\s*'
+                                 r'([\u4e00-\u9fa5]{2,25})')),
+]
+
+
+def _rights_meta(text):
+    """从一段文本（文件名/目录名/版权页）抽版权与授权信息。"""
+    d = {}
+    if not text:
+        return d
+    t = _nw(text)
+    for key, rx in _RIGHTS_PATS:
+        m = rx.search(t)
+        if not m:
+            continue
+        if key == 'isbn':
+            v = re.sub(r'\s', '', m.group(1)).upper()
+            if len(v) >= 10 and key not in d:
+                d[key] = v
+        elif key == 'pub_date':
+            if key not in d:
+                d[key] = m.group(1) + ('年%s月' % m.group(2) if m.group(2) else '年')
+        else:
+            v = (m.group(1) or '').strip(' :：')
+            if v and key not in d and (len(v) >= 2 or key in ('edition', 'printing')):
+                d[key] = v
+    return d
+
+
+def _rights_scan(name, path, colophon=''):
+    """三来源合并：文件名 → 上级目录链 → 版权页。返回 (dict, 各字段来源)。"""
+    out, src = {}, {}
+    stems = [os.path.splitext(str(name or ''))[0]]
+    if path:
+        stems += _folder_names(path)
+    for i, s in enumerate(stems):
+        tag = 'file' if i == 0 else 'folder'
+        for k, v in _rights_meta(s).items():
+            if v and k not in out:
+                out[k] = v
+                src[k] = tag
+    m = _rights_meta(colophon)
+    for k, v in m.items():
+        if v and not out.get(k):
+            out[k] = v
+            src[k] = 'colophon'
+    return out, src
 
 
 # ---- 多版本聚合
@@ -823,6 +973,37 @@ def _selftest_deep(ok):
         shutil.rmtree(root, ignore_errors=True)
 
 
+def _selftest_rights(ok):
+    """版权/授权信息抽取：文件名、上级目录、版权页三来源。"""
+    import tempfile
+    import shutil
+    m = _rights_meta('史记_中华书局授权影印本')
+    ok(bool(m.get('authorization')), '版权：文件名「X授权」→ %s' % m.get('authorization'))
+    m2 = _rights_meta('据商务印书馆授权重印_民国丛书')
+    ok(bool(m2.get('authorization')), '版权：文件名「据X授权」→ %s' % m2.get('authorization'))
+    col = ('本书由中华书局授权出版发行\n'
+           '版权所有：中华书局\nISBN 978-7-101-00000-1\n'
+           '1998年3月第1版，1998年3月第1次印刷')
+    m3 = _rights_meta(col)
+    ok(bool(m3.get('isbn')) and m3['isbn'].startswith('978'), '版权：ISBN → %s' % m3.get('isbn'))
+    ok(bool(m3.get('edition')) and bool(m3.get('printing')),
+       '版权：版次/印次 → %s / %s' % (m3.get('edition'), m3.get('printing')))
+    ok(bool(m3.get('copyright_holder')) or bool(m3.get('authorization')),
+       '版权：版权所有主体 → %s' % (m3.get('copyright_holder') or m3.get('authorization')))
+    root = tempfile.mkdtemp(prefix='vmr_')
+    try:
+        sub = os.path.join(root, '某大学图书馆藏_授权影印')
+        os.makedirs(sub, exist_ok=True)
+        fake = os.path.join(sub, '癸巳类稿.pdf')
+        with open(fake, 'wb') as f:
+            f.write(b'%PDF-1.4\n')
+        rr, src = _rights_scan('癸巳类稿.pdf', fake, col)
+        ok(bool(rr.get('authorization')) and bool(rr.get('isbn')),
+           '版权：文件+目录+版权页三来源合并 → %s src=%s' % (rr, src))
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def selftest():
     import sys
     cases = [
@@ -863,6 +1044,7 @@ def selftest():
     ok(c.startswith('布罗代尔：《十五至十八世纪的物质文明') and c.endswith('第27页。'),
        '引用：%s' % c)
     _selftest_deep(ok)
+    _selftest_rights(ok)
     txt = '\n'.join(log) + '\nresult = %s\n' % (
         'OK' if all(l.startswith('OK') for l in log) else 'FAIL')
     try:
