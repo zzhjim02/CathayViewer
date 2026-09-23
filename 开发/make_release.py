@@ -152,25 +152,43 @@ def main():
     size = os.path.getsize(exe_dst)
     h = sha256(exe_dst)
 
-    # 自检：确认包内没有任何 .db / 大索引文件
+    # 自检：确认「真止要进包的内容」里没有 .db / 索引 / 设置 / 调试脚本
+    # （注意：发布目录本身允许存运行期文件——那是在“原地刷新”时保留的用户数据，不进 zip）
     bad = []
-    for dp, _dn, fns in os.walk(rel_dir):
-        for fn in fns:
-            if os.path.splitext(fn.lower())[1] in EXCLUDE_EXT:
-                bad.append(os.path.join(dp, fn))
+    for sub in ('config', '开发'):
+        for dp, _dn, fns in os.walk(os.path.join(rel_dir, sub)):
+            for fn in fns:
+                rel = os.path.relpath(os.path.join(dp, fn), rel_dir)
+                if _skip(rel) or os.path.splitext(fn.lower())[1] in EXCLUDE_EXT:
+                    bad.append(rel)
     if bad:
-        print('打包校验失败：包里仍有被排除的文件：')
+        print('打包校验失败：要进包的内容里仍有被排除的文件：')
         for b in bad[:20]:
             print('  ', b)
         return 2
 
-    # 压 zip
+    # 压 zip（跳过运行期文件：索引库/设置/自检日志/调试脚本——它们允许留在发布目录里，但不进包）
     with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as z:
         base = os.path.basename(rel_dir)
         for dp, _dn, fns in os.walk(rel_dir):
             for fn in fns:
                 full = os.path.join(dp, fn)
-                z.write(full, os.path.join(base, os.path.relpath(full, rel_dir)))
+                rel = os.path.relpath(full, rel_dir)
+                if _skip(rel):
+                    continue
+                z.write(full, os.path.join(base, rel))
+
+    # 再校一次 zip 里没混进运行期文件
+    with zipfile.ZipFile(zip_path) as z:
+        badz = [n for n in z.namelist()
+                if os.path.splitext(n.lower())[1] in EXCLUDE_EXT
+                or os.path.basename(n).lower() in EXCLUDE_FILES
+                or os.path.basename(n).startswith(EXCLUDE_PREFIX)]
+    if badz:
+        print('打包校验失败：zip 里仍有被排除的文件：')
+        for b in badz[:20]:
+            print('  ', b)
+        return 2
     print('发布包已生成：')
     print('  目录：', rel_dir)
     print('  zip ：', zip_path, '（%.1f MB）' % (os.path.getsize(zip_path) / 1048576.0))
