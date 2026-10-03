@@ -1,3 +1,15 @@
+> [!WARNING]
+> **本仓库已停止更新（归档保存）。**
+>
+> CathayViewer 的全部功能已经并入 **[CathayHub](https://github.com/zzhjim02/CathayHub)** ——
+> 四合一发行版里的「CathayHub Viewer」，版本已推进到 **v0.3.16**
+> （打开进度条、图文对读、多标签并列翻、关联文件识别、全库检索联动都在那边继续修）。
+>
+> **新用户请直接到 [CathayHub](https://github.com/zzhjim02/CathayHub/releases) 下载。**
+> 这里只保留旧版存档，不再修问题、不再发新版。
+
+---
+
 <div align="center">
 
 # 📚 CathayViewer
