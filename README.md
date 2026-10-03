@@ -5,7 +5,10 @@
 > 四合一发行版里的「CathayHub Viewer」，版本已推进到 **v0.3.16**
 > （打开进度条、图文对读、多标签并列翻、关联文件识别、全库检索联动都在那边继续修）。
 >
-> **新用户请直接到 [CathayHub](https://github.com/zzhjim02/CathayHub/releases) 下载。**
+> **新用户请改用 [CathayHub](https://github.com/zzhjim02/CathayHub)。**
+> ⚠️ CathayHub 在 GitHub 上**只提供源代码**：它的全文检索依赖商业软件
+> FileLocator Pro，许可不允许随包分发。需要可执行版，请在 CathayHub 仓库
+> 开一个 **Issue 联系作者**（作者也会另行提供网盘链接）。
 > 这里只保留旧版存档，不再修问题、不再发新版。
 
 ---
@@ -24,32 +27,16 @@
 
 ## 🔗 Cathay 人文社科工具链
 
-> ⚠️ **本仓库已停止更新**：功能已并入后面的新一代工具（见下方「已成历史」表），这份代码保留原样、继续可用。日常建议改用 ⑦ [CathayHub](https://github.com/zzhjim02/CathayHub)。
+| 步骤 | 工具 | 功能 |
+|:---:|---|---|
+| ① | CathayIndex | 把本地文件夹建成可检索的「本地文件库」 |
+| ② | CathayFinder | 综合性图书检索引擎：11 个渠道精准查书 |
+| ③ | CathayPDG | 读秀/超星 PDG 批量转 PDF |
+| ④ | CathayOCR | 扫描件 OCR，产出可搜索文字层 PDF |
+| ⑤ | CathayShelf | 图书著录自动化整理 |
+| ⑥ | **CathayViewer（本仓库）** | **书库浏览与阅读：文件名搜索、元数据、多版本、学术引用、阅读体验** |
 
-这是一整套给人文社科研究者用的**本地**工具：从「找到一本书」，到「把它变成能搜、能读、能引用的 PDF」，再到「在上万本书里一秒检索」——每一步一个小程序，**各自独立，只挑你用得上的那一步就行**。
-
-| 步骤 | 工具 | 一句话 | 版本 |
-|:---:|---|---|---|
-| ⓪ | [CathayRepair](https://github.com/zzhjim02/CathayRepair) | PDF 打不开、一翻就崩 → 先把它抢救回来 | v1.0.0 |
-| ① | [CathayPDG](https://github.com/zzhjim02/CathayPDG) | 读秀 / 超星的 PDG 压缩包 → PDF | v0.1.6 |
-| ② | [CathayOCR](https://github.com/zzhjim02/CathayOCR) | 扫描件做 OCR → 能搜索、能复制的 PDF | v1.2.4 |
-| ③ | [CathayRestore](https://github.com/zzhjim02/CathayRestore) | 把 OCR 出来的 TXT 写回 PDF，做成双层 | v1.0.0 |
-| ④ | [CathayExtract](https://github.com/zzhjim02/CathayExtract) | 已经是双层 PDF → 直接把文字抽成 TXT | v1.2.3 |
-| ⑤ | [CathayShelf](https://github.com/zzhjim02/CathayShelf) | 批量建档归位、规范命名、繁简转换 | v0.4.6 |
-| ⑥ | [CathayFinder](https://github.com/zzhjim02/CathayFinder) | 11 个渠道查这本书在哪（找书号 / 找路径） | v1.1.0 |
-| ⑦ | [CathayHub](https://github.com/zzhjim02/CathayHub) | **索引 + 全库检索 + 浏览阅读，四合一的日常入口** | v0.3.16 |
-
-> 🧭 **最常用的一条线**：⑥ 查到书 → ① 转成 PDF → ② 让它能搜 → ⑤ 著录归架 → ⑦ 检索、翻开。
-> 每一步都能单独用，不强制串起来；整套**纯本地、不联网、不动你的原件**。
-
-**已成历史（功能已并入后面的工具，代码还能跑）**
-
-| 工具 | 现状 |
-|---|---|
-| [CathayIndex](https://github.com/zzhjim02/CathayIndex) | 已并入 ⑥ CathayFinder 的「本地文件库索引」页签，以及 ⑦ CathayHub Indexer |
-| **CathayViewer（本仓库）** | 已并入 ⑦ CathayHub Viewer |
-| [CathayReader](https://github.com/zzhjim02/CathayReader) | 已由 ⑦ CathayHub Viewer 取代 |
-| [CathaySimplify](https://github.com/zzhjim02/CathaySimplify) | 已并入 ⑤ CathayShelf 的「繁简转换 / 编码规范化」 |
+> 🧭 CathayViewer 是 CathayReader 的升级版：把「本地书库」浏览、搜索、精读三件事做在一起。
 
 ## ✨ 功能
 
